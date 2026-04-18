@@ -1,4 +1,28 @@
+import AssetCard from './AssetCard'
+import { useState } from 'react'
 function App() {
+
+  const [assets, setAssets] = useState([
+  { name: 'Gold', price: '$2,345.00', change: '+1.2%' },
+  { name: 'Tesla', price: '$182.50', change: '-0.8%' },
+  { name: 'Bitcoin', price: '$67,200.00', change: '+3.4%' },
+  { name: 'Apple', price: '189.00', change: '+0.5%'}
+  ])
+
+  const [newAssetName, setNewAssetName] = useState('')
+
+  function handleAddAsset() {
+    if(assets.find((asset) => asset.name === newAssetName)){
+      return
+    }
+    setAssets([...assets, { name: newAssetName, price: '...', change: '...' }])
+    setNewAssetName('')
+  }
+
+  function handleRemoveAsset(name){
+    setAssets(assets.filter((asset) => asset.name !== name))
+  }
+
   return (
     <div className="flex h-screen bg-gray-950 text-white">
       
@@ -17,24 +41,33 @@ function App() {
       <div className="flex-1 p-8">
         <h2 className="text-2xl font-bold mb-6">Dashboard</h2>
 
-        {/* Asset cards */}
-        <div className="grid grid-cols-3 gap-4">
-          <div className="bg-gray-900 p-4 rounded-xl">
-            <p className="text-gray-400 text-sm">Gold</p>
-            <p className="text-2xl font-bold">$2,345.00</p>
-            <p className="text-green-400 text-sm">+1.2%</p>
-          </div>
-          <div className="bg-gray-900 p-4 rounded-xl">
-            <p className="text-gray-400 text-sm">Tesla</p>
-            <p className="text-2xl font-bold">$182.50</p>
-            <p className="text-red-400 text-sm">-0.8%</p>
-          </div>
-          <div className="bg-gray-900 p-4 rounded-xl">
-            <p className="text-gray-400 text-sm">Bitcoin</p>
-            <p className="text-2xl font-bold">$67,200.00</p>
-            <p className="text-green-400 text-sm">+3.4%</p>
-          </div>
+        <div className = "flex gap-2 mb-6">
+          <input 
+            type = "text"
+            placeholder = "Add asset"
+            value = {newAssetName}
+            onChange = {(e) => setNewAssetName(e.target.value)}
+            onKeyDown = {(e) => {
+              if(e.key === 'Enter') handleAddAsset()
+            }}
+            className = "bg-gray-800 text-white px-4 py-2 rounded-lg outline-none"
+            />
+          <button onClick = {handleAddAsset} className = "bg-purple-600 px-4 py-2 rounded-lg hover:bg-purple-700">
+            Add
+          </button>
         </div>
+
+        {/* Asset cards */}
+        <div className = "grid grid-cols-3 gap-4">
+          {assets.map((asset) => (
+            <AssetCard 
+            key = {asset.name} name = {asset.name} 
+            price = {asset.price} change = {asset.change} 
+            onRemove = {() => handleRemoveAsset(asset.name)}
+            />
+          ))}
+        </div>
+
       </div>
 
     </div>
