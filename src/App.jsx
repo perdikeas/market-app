@@ -1,5 +1,6 @@
 import AssetCard from './AssetCard'
 import { useState, useEffect, useRef } from 'react'
+import { useRefreshPrices } from './useRefreshPrices'
 
 async function fetchPrice(ticker) {
   const response = await fetch(`http://localhost:3001/api/quote?symbol=${encodeURIComponent(ticker)}`)
@@ -22,6 +23,8 @@ function App() {
   const debounceTimer = useRef(null)
   const searchRef = useRef(null)
   const closeTimer = useRef(null)
+
+  useRefreshPrices(assets, setAssets)
 
   useEffect(() => {
     const defaultAssets = ['AAPL', 'TSLA', 'NVDA', 'MSFT', 'BINANCE:BTCUSDT',
