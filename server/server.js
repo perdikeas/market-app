@@ -1,6 +1,7 @@
 const express = require('express')
 const cors = require('cors')
 const rateLimit = require('express-rate-limit')
+const fs = require('fs')
 require('dotenv').config()
 
 const app = express()
@@ -17,31 +18,64 @@ const limiter = rateLimit({
 
 app.use(limiter)
 
+const CACHE_FILE = './candle-cache.json'
+let candleCache = {}
+if(fs.existsSync(CACHE_FILE)){
+  candleCache = JSON.parse(fs.readFileSync(CACHE_FILE))
+}
+
+function saveCache(){
+  fs.writeFileSync(CACHE_FILE, JSON.stringify(candleCache))
+}
+
+const inFlight = {}
+
 app.get('/api/candles', async (req, res) => {
   const { symbol } = req.query
 
   if (!symbol) return res.status(400).json({ error: 'Symbol required' })
 
-  try {
-    const response = await fetch(
+  const today = new Date().toISOString().split('T')[0]
+
+  if(candleCache[symbol] && candleCache[symbol].date == today){
+    return res.json(candleCache[symbol].data)
+  }
+
+  if(inFlight[symbol]){
+    try{
+      const data = await inFlight[symbol]
+      return res.json(data)
+    } catch{
+      return res.status(500).json({error: 'Failed to fetch candles'})
+    }
+  }
+
+  inFlight[symbol] =(async () => {
+    const response = await fetch (
       `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${symbol}&outputsize=compact&apikey=${process.env.ALPHA_VANTAGE_KEY}`
     )
     const data = await response.json()
     const timeSeries = data['Time Series (Daily)']
-    if (!timeSeries) return res.status(404).json({ error: 'No data found' })
+    if (!timeSeries) throw new Error('No data')
+    
+    const formatted = Object.entries(timeSeries).slice(0,30).reverse().map(([date,values]) => ({
+      date,
+      price: parseFloat(values['4. close'])
+    }))
 
-    const formatted = Object.entries(timeSeries)
-      .slice(0, 30)
-      .reverse()
-      .map(([date, values]) => ({
-        date,
-        price: parseFloat(values['4. close'])
-      }))
+    candleCache[symbol] = {date: today, data: formatted}
+    saveCache()
+    return formatted
+  })()
 
-    res.json(formatted)
-  } catch (error) {
+  try {
+    const data = await inFlight[symbol]
+    res.json(data)
+    } catch {
     res.status(500).json({ error: 'Failed to fetch candles' })
-  }
+    } finally {
+    delete inFlight[symbol]
+    }
 })
 
 app.get('/api/quote', async (req, res) => {
