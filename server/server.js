@@ -30,6 +30,37 @@ function saveCache() {
 
 const inFlight = {}
 
+const UNIVERSE = [
+  'AAPL', 'MSFT', 'NVDA', 'GOOGL', 'META', 'AMZN', 'TSLA', 'ORCL', 'PLTR', 'AMD', 'INTC', 'CRM',
+  'JPM', 'BAC', 'GS', 'MS', 'V', 'MA',
+  'GLD', 'SLV', 'USO', 'XOM', 'CVX',
+  'JNJ', 'PFE', 'UNH',
+  'WMT', 'NKE', 'MCD',
+  'BRK.B', 'SPY', 'QQQ', 'DIA',
+  'BINANCE:BTCUSDT'
+]
+
+const SIGNIFICANCE = {
+  'AAPL': 1.4, 'MSFT': 1.4, 'NVDA': 1.3, 'GOOGL': 1.3, 'META': 1.2,
+  'AMZN': 1.2, 'TSLA': 1.3, 'ORCL': 1.1, 'PLTR': 1.1, 'AMD': 1.2,
+  'INTC': 1.1, 'CRM': 1.1, 'JPM': 1.3, 'BAC': 1.1, 'GS': 1.2,
+  'MS': 1.1, 'V': 1.2, 'MA': 1.1, 'GLD': 1.3, 'SLV': 1.2,
+  'USO': 1.2, 'XOM': 1.2, 'CVX': 1.1, 'JNJ': 1.1, 'PFE': 1.0,
+  'UNH': 1.2, 'WMT': 1.2, 'NKE': 1.0, 'MCD': 1.1,
+  'BRK.B': 1.3, 'SPY': 1.4, 'QQQ': 1.3, 'DIA': 1.2,
+  'BINANCE:BTCUSDT': 1.3
+}
+
+let hotCache = { data: null, timestamp: null }
+const HOT_CACHE_TTL = 15 * 60 * 1000 // 15 minutes
+
+function normalize(values) {
+  const min = Math.min(...values)
+  const max = Math.max(...values)
+  if (max === min) return values.map(() => 50)
+  return values.map(v => ((v - min) / (max - min)) * 100)
+}
+
 app.get('/api/candles', async (req, res) => {
   const { symbol } = req.query
 
@@ -120,6 +151,87 @@ app.get('/api/search', async (req, res) => {
     res.json(data.result || [])
   } catch {
     res.status(500).json({ error: 'Search failed' })
+  }
+})
+
+app.get('/api/hot', async (req, res) => {
+  // Serve from cache if fresh
+  if (hotCache.data && Date.now() - hotCache.timestamp < HOT_CACHE_TTL) {
+    return res.json(hotCache.data)
+  }
+
+  try {
+    // Fetch all quotes in parallel
+    const quotePromises = UNIVERSE.map(async (symbol) => {
+      try {
+        const response = await fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${process.env.VITE_FINNHUB_API_KEY}`)
+        const data = await response.json()
+        return { symbol, ...data }
+      } catch {
+        return null
+      }
+    })
+
+    // Fetch news
+    const newsResponse = await fetch(`https://finnhub.io/api/v1/news?category=general&token=${process.env.VITE_FINNHUB_API_KEY}`)
+    const newsData = await newsResponse.json()
+
+    // Count news mentions per symbol
+    const newsMentions = {}
+    UNIVERSE.forEach(s => newsMentions[s] = 0)
+    if (Array.isArray(newsData)) {
+      newsData.forEach(article => {
+        const text = (article.headline + ' ' + (article.summary || '')).toUpperCase()
+        UNIVERSE.forEach(symbol => {
+          const ticker = symbol.includes(':') ? symbol.split(':')[1] : symbol
+          if (text.includes(ticker)) newsMentions[symbol]++
+        })
+      })
+    }
+
+    const quotes = (await Promise.all(quotePromises)).filter(q => q && q.c && q.c > 0)
+
+    // Compute raw signals
+    const momentums = quotes.map(q => Math.abs(q.dp || 0))
+    const volatilities = quotes.map(q => q.o > 0 ? ((q.h - q.l) / q.o) * 100 : 0)
+    const newsScores = quotes.map(q => newsMentions[q.symbol] || 0)
+
+    // Normalize each signal to 0-100
+    const normMomentums = normalize(momentums)
+    const normVolatilities = normalize(volatilities)
+    const normNews = normalize(newsScores)
+
+    // Compute heat scores
+    const scored = quotes.map((q, i) => {
+      const significance = SIGNIFICANCE[q.symbol] || 1.0
+      const rawScore = (normMomentums[i] * 0.30) + (50 * 0.25) + (normNews[i] * 0.25) + (normVolatilities[i] * 0.20)
+      const heatScore = rawScore * significance
+      return {
+        symbol: q.symbol,
+        price: q.c,
+        change: q.dp,
+        changeAbs: q.d,
+        high: q.h,
+        low: q.l,
+        open: q.o,
+        prevClose: q.pc,
+        newsMentions: newsMentions[q.symbol] || 0,
+        heatScore: parseFloat(heatScore.toFixed(2))
+      }
+    })
+
+    // Sort for each category
+    const hot = [...scored].sort((a, b) => b.heatScore - a.heatScore).slice(0, 6)
+    const gainers = [...scored].sort((a, b) => b.change - a.change).slice(0, 6)
+    const losers = [...scored].sort((a, b) => a.change - b.change).slice(0, 6)
+    const inTheNews = [...scored].sort((a, b) => b.newsMentions - a.newsMentions).filter(a => a.newsMentions > 0).slice(0, 6)
+
+    const result = { hot, gainers, losers, inTheNews, updatedAt: new Date().toISOString() }
+    hotCache = { data: result, timestamp: Date.now() }
+    res.json(result)
+
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch hot assets' })
   }
 })
 
