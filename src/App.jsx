@@ -1,6 +1,7 @@
 import AssetCard from './AssetCard'
 import { useState, useEffect, useRef } from 'react'
 import { useRefreshPrices } from './useRefreshPrices'
+import ChartModal from './ChartModal'
 
 async function fetchPrice(ticker) {
   const response = await fetch(`http://localhost:3001/api/quote?symbol=${encodeURIComponent(ticker)}`)
@@ -23,6 +24,7 @@ function App() {
   const debounceTimer = useRef(null)
   const searchRef = useRef(null)
   const closeTimer = useRef(null)
+  const [selectedAsset, setSelectedAsset] = useState(null)
 
   useRefreshPrices(assets, setAssets)
 
@@ -146,10 +148,19 @@ function App() {
             key={asset.name} name={asset.name}
             price={asset.price} change={asset.change}
             onRemove={() => handleRemoveAsset(asset.name)}
+            onClick ={() => setSelectedAsset(asset)}
           />
         ))}
       </div>
 
+      {selectedAsset && (
+        <ChartModal 
+          symbol = {selectedAsset.name}
+          price = {selectedAsset.price}
+          change = {selectedAsset.change}
+          onClose = {() => setSelectedAsset(null)}
+        />
+      )}
     </div>
 
   </div>

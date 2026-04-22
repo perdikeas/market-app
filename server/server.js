@@ -17,6 +17,22 @@ const limiter = rateLimit({
 
 app.use(limiter)
 
+app.get('/api/candles', async (req, res) => {
+  const { symbol, from, to } = req.query
+
+  if (!symbol) return res.status(400).json({ error: 'Symbol required' })
+
+  try {
+    const response = await fetch(
+      `https://finnhub.io/api/v1/stock/candle?symbol=${symbol}&resolution=D&from=${from}&to=${to}&token=${process.env.VITE_FINNHUB_API_KEY}`
+    )
+    const data = await response.json()
+    res.json(data)
+  } catch (error) {
+    res.status(500).json({ error: 'Failed to fetch candles' })
+  }
+})
+
 
 app.get('/api/quote', async (req, res) => {
   const symbol = req.query.symbol
