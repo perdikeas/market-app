@@ -12,27 +12,37 @@ app.use(cors({
 
 const limiter = rateLimit({
   windowMs: 1 * 60 * 1000,
-  max: 30
+  max: 200
 })
 
 app.use(limiter)
 
 app.get('/api/candles', async (req, res) => {
-  const { symbol, from, to } = req.query
+  const { symbol } = req.query
 
   if (!symbol) return res.status(400).json({ error: 'Symbol required' })
 
   try {
     const response = await fetch(
-      `https://finnhub.io/api/v1/stock/candle?symbol=${symbol}&resolution=D&from=${from}&to=${to}&token=${process.env.VITE_FINNHUB_API_KEY}`
+      `https://www.alphavantage.co/query?function=TIME_SERIES_DAILY&symbol=${symbol}&outputsize=compact&apikey=${process.env.ALPHA_VANTAGE_KEY}`
     )
     const data = await response.json()
-    res.json(data)
+    const timeSeries = data['Time Series (Daily)']
+    if (!timeSeries) return res.status(404).json({ error: 'No data found' })
+
+    const formatted = Object.entries(timeSeries)
+      .slice(0, 30)
+      .reverse()
+      .map(([date, values]) => ({
+        date,
+        price: parseFloat(values['4. close'])
+      }))
+
+    res.json(formatted)
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch candles' })
   }
 })
-
 
 app.get('/api/quote', async (req, res) => {
   const symbol = req.query.symbol

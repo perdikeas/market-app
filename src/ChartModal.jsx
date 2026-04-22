@@ -1,13 +1,11 @@
 import {useEffect, useState} from 'react'
 import {AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer} from 'recharts'
 
-async function fetchCandles(symbol){
-    const to = Math.floor(Date.now()/1000)
-    const from = to - 60*60*24*30
-    const response = await fetch(
-        `http://localhost:3001/api/candles?symbol=${encodeURIComponent(symbol)}&from=${from}&to=${to}`
-    )
-    return await response.json()
+async function fetchCandles(symbol) {
+  const response = await fetch(
+    `http://localhost:3001/api/candles?symbol=${encodeURIComponent(symbol)}`
+  )
+  return await response.json()
 }
 
 function ChartModal({symbol,price, change, onClose}) {
@@ -15,19 +13,16 @@ function ChartModal({symbol,price, change, onClose}) {
     const[loading, setLoading] = useState(true)
     const[error, setError] = useState(false)
     useEffect(() => {
-        async function load(){
-            const data = await fetchCandles(symbol)
-            if(!data || data.s === 'no data' || !data.c){
-                setError(true)
-                setLoading(false)
-                return
-            }
-            const formatted = data.t.map((timestamp, i) => ({
-                date: new Date(timestamp*1000).toLocaleDateString('en-US', {month: 'short', day: 'numeric'}),
-                price: parseFloat(data.c[i].toFixed(2))                
-            }))
-            setChartData(formatted)
+        async function load() {
+          const data = await fetchCandles(symbol)
+          console.log('Chart data received:', data)
+          if (!data || data.error || data.length === 0) {
+            setError(true)
             setLoading(false)
+            return
+          }
+          setChartData(data)
+          setLoading(false)
         }
         load()
     }, [symbol])
