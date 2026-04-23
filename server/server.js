@@ -224,7 +224,7 @@ app.get('/api/hot', async (req, res) => {
     const hot = [...scored].sort((a, b) => b.heatScore - a.heatScore).slice(0, 6)
     const gainers = [...scored].sort((a, b) => b.change - a.change).slice(0, 6)
     const losers = [...scored].sort((a, b) => a.change - b.change).slice(0, 6)
-    const inTheNews = [...scored].sort((a, b) => b.newsMentions - a.newsMentions).filter(a => a.newsMentions > 0).slice(0, 6)
+    const inTheNews = [...scored].sort((a, b) => b.newsMentions - a.newsMentions).slice(0, 6)
 
     const result = { hot, gainers, losers, inTheNews, updatedAt: new Date().toISOString() }
     hotCache = { data: result, timestamp: Date.now() }
@@ -232,6 +232,34 @@ app.get('/api/hot', async (req, res) => {
 
   } catch (error) {
     res.status(500).json({ error: 'Failed to fetch hot assets' })
+  }
+})
+
+app.get('/api/news/:symbol', async (req, res) => {
+  const symbol = req.params.symbol
+  const to = Math.floor(Date.now() / 1000)
+  const from = to - 60 * 60 * 24 * 7 // 7 days ago
+
+  try {
+    const response = await fetch(
+      `https://finnhub.io/api/v1/company-news?symbol=${encodeURIComponent(symbol)}&from=${new Date(from * 1000).toISOString().split('T')[0]}&to=${new Date(to * 1000).toISOString().split('T')[0]}&token=${process.env.VITE_FINNHUB_API_KEY}`
+    )
+    const data = await response.json()
+    res.json(Array.isArray(data) ? data.slice(0, 10) : [])
+  } catch {
+    res.status(500).json({ error: 'Failed to fetch news' })
+  }
+})
+
+
+app.get('/api/stocktwits/:symbol', async (req, res) => {
+  const { symbol } = req.params
+  try {
+    const response = await fetch(`https://api.stocktwits.com/api/2/streams/symbol/${symbol}.json`)
+    const data = await response.json()
+    res.json(data.messages || [])
+  } catch {
+    res.status(500).json({ error: 'Failed to fetch stocktwits' })
   }
 })
 

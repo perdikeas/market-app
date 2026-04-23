@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import AssetCard from './AssetCard'
 import ChartModal from './ChartModal'
+import NewsModal from './NewsModal'
 import { useRefreshPrices } from './useRefreshPrices'
 
 async function fetchPrice(ticker) {
@@ -19,17 +20,20 @@ async function fetchHot() {
   return await response.json()
 }
 
-function HotCard({ symbol, price, change, newsMentions, heatScore, onClick }) {
+function HotCard({ symbol, price, change, newsMentions, heatScore, onCardClick, onNewsClick, onTraderClick }) {
   const isPositive = change >= 0
   return (
     <div
-      onClick={onClick}
+      onClick={onCardClick}
       className="bg-gray-900 p-4 rounded-xl cursor-pointer hover:bg-gray-800 transition-colors"
     >
       <div className="flex justify-between items-start mb-2">
         <p className="text-gray-400 text-sm">{symbol}</p>
         {heatScore && (
-          <span className="text-xs bg-purple-900 text-purple-300 px-2 py-0.5 rounded-full">
+          <span
+            onClick={(e) => { e.stopPropagation(); onTraderClick() }}
+            className="text-xs bg-purple-900 text-purple-300 px-2 py-0.5 rounded-full cursor-pointer hover:bg-purple-800"
+          >
             🔥 {heatScore.toFixed(0)}
           </span>
         )}
@@ -39,7 +43,12 @@ function HotCard({ symbol, price, change, newsMentions, heatScore, onClick }) {
         {isPositive ? '+' : ''}{parseFloat(change).toFixed(2)}%
       </p>
       {newsMentions > 0 && (
-        <p className="text-xs text-gray-500 mt-1">📰 {newsMentions} mentions</p>
+        <p
+          onClick={(e) => { e.stopPropagation(); onNewsClick() }}
+          className="text-xs text-gray-500 mt-1 cursor-pointer hover:text-gray-300"
+        >
+          📰 {newsMentions} mentions
+        </p>
       )}
     </div>
   )
@@ -57,6 +66,7 @@ function Watchlist() {
   const [searchResults, setSearchResults] = useState([])
   const [showDropDown, setShowDropDown] = useState(false)
   const [selectedAsset, setSelectedAsset] = useState(null)
+  const [newsAsset, setNewsAsset] = useState(null)
   const debounceTimer = useRef(null)
   const searchRef = useRef(null)
   const closeTimer = useRef(null)
@@ -124,10 +134,6 @@ function Watchlist() {
     if (updated.length === 0) localStorage.removeItem('watchlist')
   }
 
-  function handleHotCardClick(item) {
-    setSelectedAsset({ name: item.symbol, price: item.price, change: item.change })
-  }
-
   return (
     <div className="p-8">
       <h2 className="text-2xl font-bold mb-8">Watchlist</h2>
@@ -144,7 +150,13 @@ function Watchlist() {
             <SectionTitle>🔥 Hot Right Now</SectionTitle>
             <div className="grid grid-cols-3 gap-3">
               {hotData.hot.map(item => (
-                <HotCard key={item.symbol} {...item} onClick={() => handleHotCardClick(item)} />
+                <HotCard
+                  key={item.symbol}
+                  {...item}
+                  onCardClick={() => setSelectedAsset({ name: item.symbol, price: item.price, change: item.change })}
+                  onNewsClick={() => setNewsAsset({ name: item.symbol, price: item.price, change: item.change, tab: 'news' })}
+                  onTraderClick={() => setNewsAsset({ name: item.symbol, price: item.price, change: item.change, tab: 'twits' })}
+                />
               ))}
             </div>
           </div>
@@ -157,7 +169,7 @@ function Watchlist() {
                 {hotData.gainers.map(item => (
                   <div
                     key={item.symbol}
-                    onClick={() => handleHotCardClick(item)}
+                    onClick={() => setSelectedAsset({ name: item.symbol, price: item.price, change: item.change })}
                     className="bg-gray-900 px-4 py-3 rounded-xl flex justify-between items-center cursor-pointer hover:bg-gray-800 transition-colors"
                   >
                     <span className="text-white font-medium">{item.symbol}</span>
@@ -176,7 +188,7 @@ function Watchlist() {
                 {hotData.losers.map(item => (
                   <div
                     key={item.symbol}
-                    onClick={() => handleHotCardClick(item)}
+                    onClick={() => setSelectedAsset({ name: item.symbol, price: item.price, change: item.change })}
                     className="bg-gray-900 px-4 py-3 rounded-xl flex justify-between items-center cursor-pointer hover:bg-gray-800 transition-colors"
                   >
                     <span className="text-white font-medium">{item.symbol}</span>
@@ -196,7 +208,13 @@ function Watchlist() {
               <SectionTitle>📰 In The News</SectionTitle>
               <div className="grid grid-cols-3 gap-3">
                 {hotData.inTheNews.map(item => (
-                  <HotCard key={item.symbol} {...item} onClick={() => handleHotCardClick(item)} />
+                  <HotCard
+                    key={item.symbol}
+                    {...item}
+                    onCardClick={() => setSelectedAsset({ name: item.symbol, price: item.price, change: item.change })}
+                    onNewsClick={() => setNewsAsset({ name: item.symbol, price: item.price, change: item.change, tab: 'news' })}
+                    onTraderClick={() => setNewsAsset({ name: item.symbol, price: item.price, change: item.change, tab: 'twits' })}
+                  />
                 ))}
               </div>
             </div>
@@ -256,6 +274,16 @@ function Watchlist() {
           price={selectedAsset.price}
           change={selectedAsset.change}
           onClose={() => setSelectedAsset(null)}
+        />
+      )}
+
+      {newsAsset && (
+        <NewsModal
+          symbol={newsAsset.name}
+          price={newsAsset.price}
+          change={newsAsset.change}
+          initialTab={newsAsset.tab || 'news'}
+          onClose={() => setNewsAsset(null)}
         />
       )}
     </div>
