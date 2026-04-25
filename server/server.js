@@ -18,6 +18,8 @@ const limiter = rateLimit({
 
 app.use(limiter)
 
+app.use(express.json())
+
 const CACHE_FILE = './candle-cache.json'
 let candleCache = {}
 if (fs.existsSync(CACHE_FILE)) {
@@ -86,7 +88,7 @@ app.get('/api/candles', async (req, res) => {
 
     if (symbol.includes(':')) {
       const cryptoSymbol = symbol.split(':')[1].replace('USDT', '')
-      const response = await fetch(`https://www.alphavantage.co/query?function=DIGITAL_CURRENCY_DAILY&symbol=${cryptoSymbol}&market=USD&apikey=${process.env.ALPHA_VANTAGE_KEY}`)      
+      const response = await fetch(`https://www.alphavantage.co/query?function=DIGITAL_CURRENCY_DAILY&symbol=${cryptoSymbol}&market=USD&apikey=${process.env.ALPHA_VANTAGE_KEY}`)
       const data = await response.json()
       const timeSeries = data['Time Series (Digital Currency Daily)']
       if (!timeSeries) throw new Error('No data')
@@ -238,14 +240,19 @@ app.get('/api/hot', async (req, res) => {
 app.get('/api/news/:symbol', async (req, res) => {
   const symbol = req.params.symbol
   const to = Math.floor(Date.now() / 1000)
-  const from = to - 60 * 60 * 24 * 7 // 7 days ago
+  const from = to - 60 * 60 * 24 * 7
 
   try {
-    const response = await fetch(
-      `https://finnhub.io/api/v1/company-news?symbol=${encodeURIComponent(symbol)}&from=${new Date(from * 1000).toISOString().split('T')[0]}&to=${new Date(to * 1000).toISOString().split('T')[0]}&token=${process.env.VITE_FINNHUB_API_KEY}`
-    )
-    const data = await response.json()
-    res.json(Array.isArray(data) ? data.slice(0, 10) : [])
+    const [newsResponse, quoteResponse] = await Promise.all([
+      fetch(`https://finnhub.io/api/v1/company-news?symbol=${encodeURIComponent(symbol)}&from=${new Date(from * 1000).toISOString().split('T')[0]}&to=${new Date(to * 1000).toISOString().split('T')[0]}&token=${process.env.VITE_FINNHUB_API_KEY}`),
+      fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(symbol)}&token=${process.env.VITE_FINNHUB_API_KEY}`)
+    ])
+    const news = await newsResponse.json()
+    const quote = await quoteResponse.json()
+    res.json({
+      news: Array.isArray(news) ? news.slice(0, 10) : [],
+      quote
+    })
   } catch {
     res.status(500).json({ error: 'Failed to fetch news' })
   }
@@ -257,11 +264,36 @@ app.get('/api/stocktwits/:symbol', async (req, res) => {
   try {
     const response = await fetch(`https://api.stocktwits.com/api/2/streams/symbol/${symbol}.json`)
     const data = await response.json()
+    console.log('StockTwits response:', JSON.stringify(data).slice(0, 200))
     res.json(data.messages || [])
-  } catch {
+  } catch (err) {
+    console.log('StockTwits error:', err.message)
     res.status(500).json({ error: 'Failed to fetch stocktwits' })
   }
 })
+
+app.post('/api/generate', async (req, res) => {
+  console.log('Generate route hit')
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify(req.body)
+    })
+    console.log('Anthropic status:', response.status)
+    const data = await response.json()
+    console.log('Anthropic response:', JSON.stringify(data).slice(0, 300))
+    res.json(data)
+  } catch (err) {
+    console.log('Anthropic error:', err.message)
+    res.status(500).json({ error: 'Failed to generate' })
+  }
+})
+
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`)
