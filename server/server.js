@@ -5,6 +5,7 @@ const fs = require('fs')
 require('dotenv').config()
 const { router: authRouter, authenticateToken} = require('./auth')
 const db = require('./db')
+const bcrypt = require('bcrypt')
 
 const app = express()
 const PORT = 3001
@@ -369,6 +370,52 @@ app.get('/api/transactions', authenticateToken, (req, res) => {
 app.get('/api/transactions/summary', authenticateToken, (req, res) => {
   const result = db.prepare('SELECT COALESCE(SUM(pnl), 0) as total_realized_pnl FROM transactions WHERE user_id = ? AND type = ?').get(req.userId, 'sell')
   res.json(result)
+})
+
+app.put('/api/auth/password', authenticateToken, async (req, res) => {
+  const { currentPassword, newPassword } = req.body
+  if (!currentPassword || !newPassword) {
+    return res.status(400).json({ error: 'Current and new password required' })
+  }
+  if (newPassword.length < 6) {
+    return res.status(400).json({ error: 'New password must be at least 6 characters' })
+  }
+  try {
+    const user = db.prepare('SELECT * FROM users WHERE id = ?').get(req.userId)
+    const valid = await bcrypt.compare(currentPassword, user.password_hash)
+    if (!valid) return res.status(401).json({ error: 'Current password is incorrect' })
+    const newHash = await bcrypt.hash(newPassword, 10)
+    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(newHash, req.userId)
+    res.json({ success: true })
+  } catch {
+    res.status(500).json({ error: 'Failed to change password' })
+  }
+})
+
+app.delete('/api/auth/account', authenticateToken, async (req, res) => {
+  try {
+    db.prepare('DELETE FROM transactions WHERE user_id = ?').run(req.userId)
+    db.prepare('DELETE FROM positions WHERE user_id = ?').run(req.userId)
+    db.prepare('DELETE FROM users WHERE id = ?').run(req.userId)
+    res.json({ success: true })
+  } catch {
+    res.status(500).json({ error: 'Failed to delete account' })
+  }
+})
+
+app.get('/api/transactions/export', authenticateToken, (req, res) => {
+  const transactions = db.prepare('SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC').all(req.userId)
+  
+  const csv = [
+    'Date,Type,Symbol,Shares,Price,P&L',
+    ...transactions.map(tx => 
+      `${tx.created_at},${tx.type},${tx.symbol},${tx.shares},${tx.price},${tx.pnl || ''}`
+    )
+  ].join('\n')
+
+  res.setHeader('Content-Type', 'text/csv')
+  res.setHeader('Content-Disposition', 'attachment; filename=transactions.csv')
+  res.send(csv)
 })
 
 app.listen(PORT, () => {

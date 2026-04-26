@@ -18,7 +18,8 @@ function App() {
   const [token, setToken] = useState(localStorage.getItem('token'))
   const [email, setEmail] = useState(localStorage.getItem('email'))
 
-  useRefreshPrices(assets, setAssets)
+  const refreshInterval = parseInt(localStorage.getItem('refreshInterval')) || 30
+  useRefreshPrices(assets, setAssets, refreshInterval * 1000)
 
   useEffect(() => {
     const saved = localStorage.getItem('assets')
@@ -120,7 +121,12 @@ function App() {
           <Watchlist />
         )}
         {currentTab === 'settings' && (
-          <Settings assets={assets} setAssets={setAssets} />
+          <Settings
+            assets={assets}
+            setAssets={setAssets}
+            token={token}
+            onLogout={handleLogout}
+          />
         )}
       </div>
 
