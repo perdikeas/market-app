@@ -305,18 +305,22 @@ app.get('/api/portfolio', authenticateToken, (req, res) => {
 })
 
 app.post('/api/portfolio', authenticateToken, (req, res) => {
-  const {symbol, shares, avg_buy_price} = req.body
-  if(!symbol || !shares || !avg_buy_price){
-    return res.status(400).json({ error: 'Symbol, shares and avg_buy_price required'})
+  const { symbol, shares, avg_buy_price } = req.body
+  if (!symbol || !shares || !avg_buy_price) {
+    return res.status(400).json({ error: 'Symbol, shares and avg_buy_price required' })
   }
-  const existing = db.prepare('SELECT * FROM positions WHERE user_id = ? AND symbol = ?').
-  get(req.userId, symbol)
-  if(existing){
-    return res.status(409).json({ error: 'Position already exists'})
+  const existing = db.prepare('SELECT * FROM positions WHERE user_id = ? AND symbol = ?').get(req.userId, symbol)
+  if (existing) {
+    return res.status(409).json({ error: 'Position already exists' })
   }
   const stmt = db.prepare('INSERT INTO positions (user_id, symbol, shares, avg_buy_price) VALUES (?, ?, ?, ?)')
   const result = stmt.run(req.userId, symbol, shares, avg_buy_price)
-  res.json({ id: result.lastInsertRowid, symbol, shares, avg_buy_price})  
+
+  // Record buy transaction
+  db.prepare('INSERT INTO transactions (user_id, symbol, type, shares, price, pnl) VALUES (?, ?, ?, ?, ?, ?)')
+    .run(req.userId, symbol, 'buy', shares, avg_buy_price, null)
+
+  res.json({ id: result.lastInsertRowid, symbol, shares, avg_buy_price })
 })
 
 app.put('/api/portfolio/:id', authenticateToken, (req, res) => {
@@ -331,12 +335,40 @@ app.put('/api/portfolio/:id', authenticateToken, (req, res) => {
   res.json({id: req.params.id, symbol: position.symbol, shares, avg_buy_price})
 })
 
-app.delete('/api/portfolio/:id', authenticateToken, (req, res) => {
-  const position = db.prepare('SELECT * FROM positions WHERE id = ? AND user_id = ?').
-  get(req.params.id, req.userId)
-  if(!position) return res.status(404).json({error: 'Position not found'})  
-  db.prepare('DELETE FROM positions WHERE id = ?').run(req.params.id)
-  res.json({success: true})
+app.delete('/api/portfolio/:id', authenticateToken, async (req, res) => {
+  const position = db.prepare('SELECT * FROM positions WHERE id = ? AND user_id = ?').get(req.params.id, req.userId)
+  if (!position) return res.status(404).json({ error: 'Position not found' })
+
+  try {
+    // Fetch current price
+    const quoteResponse = await fetch(`https://finnhub.io/api/v1/quote?symbol=${encodeURIComponent(position.symbol)}&token=${process.env.VITE_FINNHUB_API_KEY}`)
+    const quote = await quoteResponse.json()
+    const sellPrice = quote.c
+
+    // Calculate realized P&L
+    const pnl = (sellPrice - position.avg_buy_price) * position.shares
+
+    // Record sell transaction
+    db.prepare('INSERT INTO transactions (user_id, symbol, type, shares, price, pnl) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(req.userId, position.symbol, 'sell', position.shares, sellPrice, pnl)
+
+    // Delete position
+    db.prepare('DELETE FROM positions WHERE id = ?').run(req.params.id)
+
+    res.json({ success: true, sellPrice, pnl })
+  } catch (err) {
+    res.status(500).json({ error: 'Failed to sell position' })
+  }
+})
+
+app.get('/api/transactions', authenticateToken, (req, res) => {
+  const transactions = db.prepare('SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC').all(req.userId)
+  res.json(transactions)
+})
+
+app.get('/api/transactions/summary', authenticateToken, (req, res) => {
+  const result = db.prepare('SELECT COALESCE(SUM(pnl), 0) as total_realized_pnl FROM transactions WHERE user_id = ? AND type = ?').get(req.userId, 'sell')
+  res.json(result)
 })
 
 app.listen(PORT, () => {

@@ -30,4 +30,18 @@ db.exec(`
     )
 `)
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS transactions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER NOT NULL,
+    symbol TEXT NOT NULL,
+    type TEXT NOT NULL,
+    shares REAL NOT NULL,
+    price REAL NOT NULL,
+    pnl REAL,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (user_id) REFERENCES users(id)
+  )
+`)
+
 module.exports = db
