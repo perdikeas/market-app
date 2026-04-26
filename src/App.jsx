@@ -14,7 +14,7 @@ async function fetchPrice(ticker) {
 
 function App() {
   const [assets, setAssets] = useState([])
-  const [currentTab, setCurrentTab] = useState('dashboard')
+  const [currentTab, setCurrentTab] = useState(localStorage.getItem('currentTab') || 'dashboard')
   const [token, setToken] = useState(localStorage.getItem('token'))
   const [email, setEmail] = useState(localStorage.getItem('email'))
 
@@ -45,6 +45,11 @@ function App() {
     }
   }, [assets])
 
+  function handleTabChange(tab) {
+    setCurrentTab(tab)
+    localStorage.setItem('currentTab', tab)
+  }
+
   function handleLogin(token, email) {
     setToken(token)
     setEmail(email)
@@ -53,6 +58,7 @@ function App() {
   function handleLogout() {
     localStorage.removeItem('token')
     localStorage.removeItem('email')
+    localStorage.removeItem('currentTab')
     setToken(null)
     setEmail(null)
   }
@@ -78,7 +84,7 @@ function App() {
           {navItems.map(item => (
             <button
               key={item.id}
-              onClick={() => setCurrentTab(item.id)}
+              onClick={() => handleTabChange(item.id)}
               className={`px-4 py-2 rounded-lg text-left transition-colors ${
                 currentTab === item.id
                   ? 'bg-gray-800 text-white'
