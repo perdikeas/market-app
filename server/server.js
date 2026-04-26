@@ -3,6 +3,8 @@ const cors = require('cors')
 const rateLimit = require('express-rate-limit')
 const fs = require('fs')
 require('dotenv').config()
+const { router: authRouter, authenticateToken} = require('./auth')
+const db = require('./db')
 
 const app = express()
 const PORT = 3001
@@ -19,6 +21,8 @@ const limiter = rateLimit({
 app.use(limiter)
 
 app.use(express.json())
+
+app.use('/api/auth', authRouter)
 
 const CACHE_FILE = './candle-cache.json'
 let candleCache = {}
@@ -294,6 +298,46 @@ app.post('/api/generate', async (req, res) => {
   }
 })
 
+
+app.get('/api/portfolio', authenticateToken, (req, res) => {
+  const positions = db.prepare('SELECT * FROM positions WHERE user_id = ?').all(req.userId)
+  res.json(positions)
+})
+
+app.post('/api/portfolio', authenticateToken, (req, res) => {
+  const {symbol, shares, avg_buy_price} = req.body
+  if(!symbol || !shares || !avg_buy_price){
+    return res.status(400).json({ error: 'Symbol, shares and avg_buy_price required'})
+  }
+  const existing = db.prepare('SELECT * FROM positions WHERE user_id = ? AND symbol = ?').
+  get(req.userId, symbol)
+  if(existing){
+    return res.status(409).json({ error: 'Position already exists'})
+  }
+  const stmt = db.prepare('INSERT INTO positions (user_id, symbol, shares, avg_buy_price) VALUES (?, ?, ?, ?)')
+  const result = stmt.run(req.userId, symbol, shares, avg_buy_price)
+  res.json({ id: result.lastInsertRowid, symbol, shares, avg_buy_price})  
+})
+
+app.put('/api/portfolio/:id', authenticateToken, (req, res) => {
+  const {shares, avg_buy_price} = req.body
+  const position = db.prepare('SELECT * FROM positions WHERE id = ? AND user_id = ?').
+  get(req.params.id, req.userId)
+  if(!position){
+    return res.status(404).json({error: 'Position not found'})
+  }
+  db.prepare('UPDATE positions SET shares = ?, avg_buy_price = ? WHERE id=?').
+  run(shares, avg_buy_price, req.params.id)
+  res.json({id: req.params.id, symbol: position.symbol, shares, avg_buy_price})
+})
+
+app.delete('/api/portfolio/:id', authenticateToken, (req, res) => {
+  const position = db.prepare('SELECT * FROM positions WHERE id = ? AND user_id = ?').
+  get(req.params.id, req.userId)
+  if(!position) return res.status(404).json({error: 'Position not found'})  
+  db.prepare('DELETE FROM positions WHERE id = ?').run(req.params.id)
+  res.json({success: true})
+})
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`)

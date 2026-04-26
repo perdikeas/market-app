@@ -1,9 +1,10 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useRefreshPrices } from './useRefreshPrices'
 import Dashboard from './Dashboard'
 import Portfolio from './Portfolio'
 import Watchlist from './Watchlist'
 import Settings from './Settings'
+import Login from './Login'
 
 async function fetchPrice(ticker) {
   const response = await fetch(`http://localhost:3001/api/quote?symbol=${encodeURIComponent(ticker)}`)
@@ -12,9 +13,10 @@ async function fetchPrice(ticker) {
 }
 
 function App() {
-
   const [assets, setAssets] = useState([])
   const [currentTab, setCurrentTab] = useState('dashboard')
+  const [token, setToken] = useState(localStorage.getItem('token'))
+  const [email, setEmail] = useState(localStorage.getItem('email'))
 
   useRefreshPrices(assets, setAssets)
 
@@ -42,6 +44,22 @@ function App() {
       localStorage.setItem('assets', JSON.stringify(assets))
     }
   }, [assets])
+
+  function handleLogin(token, email) {
+    setToken(token)
+    setEmail(email)
+  }
+
+  function handleLogout() {
+    localStorage.removeItem('token')
+    localStorage.removeItem('email')
+    setToken(null)
+    setEmail(null)
+  }
+
+  if (!token) {
+    return <Login onLogin={handleLogin} />
+  }
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard' },
@@ -71,6 +89,17 @@ function App() {
             </button>
           ))}
         </nav>
+
+        {/* User info + logout at bottom of sidebar */}
+        <div className="mt-auto">
+          <p className="text-gray-500 text-xs mb-2 truncate">{email}</p>
+          <button
+            onClick={handleLogout}
+            className="w-full px-4 py-2 rounded-lg text-gray-400 hover:text-white hover:bg-gray-800 text-left text-sm transition-colors"
+          >
+            Sign Out
+          </button>
+        </div>
       </div>
 
       {/* Main content */}
@@ -79,7 +108,7 @@ function App() {
           <Dashboard assets={assets} setAssets={setAssets} />
         )}
         {currentTab === 'portfolio' && (
-          <Portfolio assets={assets} />
+          <Portfolio assets={assets} token={token} />
         )}
         {currentTab === 'watchlist' && (
           <Watchlist />

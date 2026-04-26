@@ -25,3 +25,6 @@ dist-ssr
 *.sw?
 server/.env
 server/candle-cache.json
+server/database.db
+server/database.db-shm
+server/database.db-wal

@@ -15,18 +15,27 @@ const BEARISH_WORDS = [
   'below', 'disappoints', 'concern', 'fears', 'cut', 'layoff', 'lawsuit'
 ]
 
-function computeSentiment(headlines) {
-  if (!headlines || headlines.length === 0) return 0
-  let total = 0
-  headlines.forEach(h => {
-    const text = h.toLowerCase()
-    let score = 0
-    BULLISH_WORDS.forEach(w => { if (text.includes(w)) score++ })
-    BEARISH_WORDS.forEach(w => { if (text.includes(w)) score-- })
-    total += score
-  })
-  const avg = total / headlines.length
-  return Math.max(-100, Math.min(100, avg * 75))
+function computeSentiment(headlines, change) {
+  let newsScore = 0
+  if (headlines && headlines.length > 0) {
+    let total = 0
+    headlines.forEach(h => {
+      const text = h.toLowerCase()
+      let score = 0
+      BULLISH_WORDS.forEach(w => { if (text.includes(w)) score++ })
+      BEARISH_WORDS.forEach(w => { if (text.includes(w)) score-- })
+      total += score
+    })
+    const avg = total / headlines.length
+    newsScore = avg * 150
+  }
+
+  // Price momentum score — weight it heavily
+  const momentumScore = (change || 0) * 8
+
+  // Combine: 50% news, 50% momentum
+  const combined = (newsScore * 0.5) + (momentumScore * 0.5)
+  return Math.max(-100, Math.min(100, combined))
 }
 
 function getLabel(score) {
@@ -92,37 +101,37 @@ async function generateTraderTalk(symbol, price, change, sentimentLabel, headlin
   const headlinesSummary = headlines.slice(0, 5).map(h => h.headline).join('. ')
 
   const prompt = `You are simulating a live trader chat room feed for ${symbol}.
-  Current price: $${price}, Change today: ${change > 0 ? '+' : ''}${parseFloat(change).toFixed(2)}%, Overall sentiment: ${sentimentLabel}.
-  Recent price history (last 7 days): ${priceHistory}.
-  Recent news: ${headlinesSummary}.
+Current price: $${price}, Change today: ${change > 0 ? '+' : ''}${parseFloat(change).toFixed(2)}%, Overall sentiment: ${sentimentLabel}.
+Recent price history (last 7 days): ${priceHistory}.
+Recent news: ${headlinesSummary}.
 
-  Generate 20 realistic trader chat messages that look like a live feed from the last 2 hours.
-  Use these trader archetypes and mix them throughout:
-  - Day traders (short term, technical levels, entries/exits)
-  - Swing traders (multi-day positions, trends)
-  - Options traders (calls, puts, IV, Greeks)
-  - Retail investors (longer term, fundamentals)
-  - Skeptics/bears (always questioning the move)
-  - Momentum chasers (FOMO buyers)
-  - Experienced veterans (calm, measured)
+Generate 20 realistic trader chat messages that look like a live feed from the last 2 hours.
+Use these trader archetypes and mix them throughout:
+- Day traders (short term, technical levels, entries/exits)
+- Swing traders (multi-day positions, trends)
+- Options traders (calls, puts, IV, Greeks)
+- Retail investors (longer term, fundamentals)
+- Skeptics/bears (always questioning the move)
+- Momentum chasers (FOMO buyers)
+- Experienced veterans (calm, measured)
 
-  Rules:
-  - Reference actual price levels, % moves, and support/resistance
-  - Some messages should reply to or reference previous messages (use "@username")
-  - Use realistic trading slang: "ripping", "dumping", "bagholding", "FOMO", "dip buy", "stop out", "squeeze", "moon", "rug", "consolidating", "breakout", "support", "resistance"
-  - Vary message length: some very short (1 sentence), some longer (3-4 sentences)
-  - Include some with emojis, some without
-  - Timestamps should go from ~2 hours ago to just now
-  - Make it feel like a real heated discussion reflecting the current market conditions
+Rules:
+- Reference actual price levels, % moves, and support/resistance
+- Some messages should reply to or reference previous messages (use "@username")
+- Use realistic trading slang: "ripping", "dumping", "bagholding", "FOMO", "dip buy", "stop out", "squeeze", "moon", "rug", "consolidating", "breakout", "support", "resistance"
+- Vary message length: some very short (1 sentence), some longer (3-4 sentences)
+- Include some with emojis, some without
+- Timestamps should go from ~2 hours ago to just now
+- Make it feel like a real heated discussion reflecting the current market conditions
 
-  Format as JSON array:
-  [{
-    "username": "trader_name",
-    "message": "...",
-    "sentiment": "bullish|bearish|neutral",
-    "timestamp": "X mins ago"
-  }]
-  Only return the JSON array, nothing else.`
+Format as JSON array:
+[{
+  "username": "trader_name",
+  "message": "...",
+  "sentiment": "bullish|bearish|neutral",
+  "timestamp": "X mins ago"
+}]
+Only return the JSON array, nothing else.`
 
   const response = await fetch('http://localhost:3001/api/generate', {
     method: 'POST',
@@ -133,14 +142,11 @@ async function generateTraderTalk(symbol, price, change, sentimentLabel, headlin
       messages: [{ role: 'user', content: prompt }]
     })
   })
-  
+
   const data = await response.json()
-  console.log('Raw AI response:', data)
   const text = data.content?.[0]?.text || ''
-  console.log('AI text:', text)
   const clean = text.replace(/```json\n?|```\n?/g, '').trim()
   return JSON.parse(clean)
-
 }
 
 function ChartModal({ symbol, price, change, onClose }) {
@@ -171,11 +177,9 @@ function ChartModal({ symbol, price, change, onClose }) {
       }
       setChartLoading(false)
       const articles = newsData.news || []
-      console.log('Articles count:', articles.length)
-      console.log('First article:', articles[0])
       setNews(articles)
       const headlines = articles.map(a => a.headline)
-      const score = computeSentiment(headlines)
+      const score = computeSentiment(headlines, change)
       setSentimentScore(score)
     }
     load()
@@ -333,10 +337,11 @@ function ChartModal({ symbol, price, change, onClose }) {
                       {twit.username?.[0]?.toUpperCase()}
                     </div>
                     <span className="text-white text-sm font-medium">{twit.username}</span>
-                    <span className={`text-xs px-2 py-0.5 rounded-full ${twit.sentiment === 'bullish' ? 'bg-green-900 text-green-400' :
-                        twit.sentiment === 'bearish' ? 'bg-red-900 text-red-400' :
-                          'bg-gray-700 text-gray-400'
-                      }`}>
+                    <span className={`text-xs px-2 py-0.5 rounded-full ${
+                      twit.sentiment === 'bullish' ? 'bg-green-900 text-green-400' :
+                      twit.sentiment === 'bearish' ? 'bg-red-900 text-red-400' :
+                      'bg-gray-700 text-gray-400'
+                    }`}>
                       {twit.sentiment === 'bullish' ? '📈 Bullish' : twit.sentiment === 'bearish' ? '📉 Bearish' : '➡️ Neutral'}
                     </span>
                     <span className="text-gray-500 text-xs ml-auto">{twit.timestamp}</span>
