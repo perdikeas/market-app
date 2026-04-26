@@ -5,6 +5,7 @@ import Portfolio from './Portfolio'
 import Watchlist from './Watchlist'
 import Settings from './Settings'
 import Login from './Login'
+import ErrorBoundary from './ErrorBoundary'
 
 async function fetchPrice(ticker) {
   const response = await fetch(`http://localhost:3001/api/quote?symbol=${encodeURIComponent(ticker)}`)
@@ -17,6 +18,7 @@ function App() {
   const [currentTab, setCurrentTab] = useState(localStorage.getItem('currentTab') || 'dashboard')
   const [token, setToken] = useState(localStorage.getItem('token'))
   const [email, setEmail] = useState(localStorage.getItem('email'))
+  const [sidebarOpen, setSidebarOpen] = useState(false)
 
   const refreshInterval = parseInt(localStorage.getItem('refreshInterval')) || 30
   useRefreshPrices(assets, setAssets, refreshInterval * 1000)
@@ -49,6 +51,7 @@ function App() {
   function handleTabChange(tab) {
     setCurrentTab(tab)
     localStorage.setItem('currentTab', tab)
+    setSidebarOpen(false)
   }
 
   function handleLogin(token, email) {
@@ -78,8 +81,21 @@ function App() {
   return (
     <div className="flex h-screen bg-gray-950 text-white">
 
+      {/* Mobile overlay */}
+      {sidebarOpen && (
+        <div
+          className="fixed inset-0 bg-black bg-opacity-50 z-20 lg:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
-      <div className="w-64 bg-gray-900 p-6 flex flex-col gap-4">
+      <div className={`
+        fixed lg:static inset-y-0 left-0 z-30
+        w-64 bg-gray-900 p-6 flex flex-col gap-4
+        transform transition-transform duration-200
+        ${sidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}
+      `}>
         <h1 className="text-xl font-bold text-purple-400">MarketDash</h1>
         <nav className="flex flex-col gap-2">
           {navItems.map(item => (
@@ -97,7 +113,6 @@ function App() {
           ))}
         </nav>
 
-        {/* User info + logout at bottom of sidebar */}
         <div className="mt-auto">
           <p className="text-gray-500 text-xs mb-2 truncate">{email}</p>
           <button
@@ -111,25 +126,35 @@ function App() {
 
       {/* Main content */}
       <div className="flex-1 overflow-y-auto">
-        {currentTab === 'dashboard' && (
-          <Dashboard assets={assets} setAssets={setAssets} />
-        )}
-        {currentTab === 'portfolio' && (
-          <Portfolio assets={assets} token={token} />
-        )}
-        {currentTab === 'watchlist' && (
-          <Watchlist />
-        )}
-        {currentTab === 'settings' && (
-          <Settings
-            assets={assets}
-            setAssets={setAssets}
-            token={token}
-            onLogout={handleLogout}
-          />
-        )}
-      </div>
 
+        {/* Mobile top bar */}
+        <div className="lg:hidden flex items-center justify-between p-4 bg-gray-900 border-b border-gray-800">
+          <h1 className="text-lg font-bold text-purple-400">MarketDash</h1>
+          <button
+            onClick={() => setSidebarOpen(!sidebarOpen)}
+            className="text-gray-400 hover:text-white p-2"
+          >
+            <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+        </div>
+
+        <ErrorBoundary>
+          {currentTab === 'dashboard' && <Dashboard assets={assets} setAssets={setAssets} />}
+          {currentTab === 'portfolio' && <Portfolio assets={assets} token={token} />}
+          {currentTab === 'watchlist' && <Watchlist />}
+          {currentTab === 'settings' && (
+            <Settings
+              assets={assets}
+              setAssets={setAssets}
+              token={token}
+              onLogout={handleLogout}
+            />
+          )}
+        </ErrorBoundary>
+
+      </div>
     </div>
   )
 }

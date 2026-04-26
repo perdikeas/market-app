@@ -204,7 +204,7 @@ function ChartModal({ symbol, price, change, onClose }) {
       className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50"
       onMouseDown={(e) => { if (e.target === e.currentTarget) onClose() }}
     >
-      <div className="bg-gray-900 rounded-2xl p-6 w-[800px] max-w-full max-h-[90vh] overflow-y-auto">
+      <div className="bg-gray-900 rounded-2xl p-4 md:p-6 w-full md:w-[800px] max-w-full max-h-[90vh] overflow-y-auto mx-2 md:mx-0">
 
         {/* Header */}
         <div className="flex justify-between items-start mb-4">
@@ -219,7 +219,7 @@ function ChartModal({ symbol, price, change, onClose }) {
         </div>
 
         {/* Chart + Sentiment side by side */}
-        <div className="flex gap-4 mb-6">
+        <div className="flex flex-col md:flex-row gap-4 mb-6">
           <div className="flex-1">
             {chartLoading && <p className="text-gray-400 text-center py-12">Loading chart...</p>}
             {chartError && <p className="text-gray-400 text-center py-12">No chart data available</p>}
@@ -247,7 +247,7 @@ function ChartModal({ symbol, price, change, onClose }) {
             <p className="text-gray-600 text-xs text-right mt-1">Past 30 days</p>
           </div>
 
-          <div className="w-48 flex flex-col items-center justify-center bg-gray-800 rounded-xl p-4">
+          <div className="w-full md:w-48 flex flex-col items-center justify-center bg-gray-800 rounded-xl p-4">
             <p className="text-gray-400 text-xs mb-2 font-medium uppercase tracking-wide">Sentiment</p>
             <SentimentGauge score={sentimentScore} />
             <div className="w-full mt-3 flex flex-col gap-1">

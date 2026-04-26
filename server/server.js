@@ -3,7 +3,7 @@ const cors = require('cors')
 const rateLimit = require('express-rate-limit')
 const fs = require('fs')
 require('dotenv').config()
-const { router: authRouter, authenticateToken} = require('./auth')
+const { router: authRouter, authenticateToken } = require('./auth')
 const db = require('./db')
 const bcrypt = require('bcrypt')
 
@@ -11,7 +11,7 @@ const app = express()
 const PORT = 3001
 
 app.use(cors({
-  origin: 'http://localhost:5173'
+  origin: ['http://localhost:5173', 'http://127.20.10.2:5173']
 }))
 
 const limiter = rateLimit({
@@ -325,15 +325,15 @@ app.post('/api/portfolio', authenticateToken, (req, res) => {
 })
 
 app.put('/api/portfolio/:id', authenticateToken, (req, res) => {
-  const {shares, avg_buy_price} = req.body
+  const { shares, avg_buy_price } = req.body
   const position = db.prepare('SELECT * FROM positions WHERE id = ? AND user_id = ?').
-  get(req.params.id, req.userId)
-  if(!position){
-    return res.status(404).json({error: 'Position not found'})
+    get(req.params.id, req.userId)
+  if (!position) {
+    return res.status(404).json({ error: 'Position not found' })
   }
   db.prepare('UPDATE positions SET shares = ?, avg_buy_price = ? WHERE id=?').
-  run(shares, avg_buy_price, req.params.id)
-  res.json({id: req.params.id, symbol: position.symbol, shares, avg_buy_price})
+    run(shares, avg_buy_price, req.params.id)
+  res.json({ id: req.params.id, symbol: position.symbol, shares, avg_buy_price })
 })
 
 app.delete('/api/portfolio/:id', authenticateToken, async (req, res) => {
@@ -405,10 +405,10 @@ app.delete('/api/auth/account', authenticateToken, async (req, res) => {
 
 app.get('/api/transactions/export', authenticateToken, (req, res) => {
   const transactions = db.prepare('SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC').all(req.userId)
-  
+
   const csv = [
     'Date,Type,Symbol,Shares,Price,P&L',
-    ...transactions.map(tx => 
+    ...transactions.map(tx =>
       `${tx.created_at},${tx.type},${tx.symbol},${tx.shares},${tx.price},${tx.pnl || ''}`
     )
   ].join('\n')
@@ -416,6 +416,20 @@ app.get('/api/transactions/export', authenticateToken, (req, res) => {
   res.setHeader('Content-Type', 'text/csv')
   res.setHeader('Content-Disposition', 'attachment; filename=transactions.csv')
   res.send(csv)
+})
+
+app.post('/api/portfolio/snapshot', authenticateToken, (req, res) => {
+  const { total_value } = req.body
+  if (!total_value) return res.status(400).json({ error: 'total_value required' })
+  db.prepare('INSERT INTO portfolio_snapshots (user_id, total_value) VALUES (?, ?)').run(req.userId, total_value)
+  res.json({ success: true })
+})
+
+app.get('/api/portfolio/snapshots', authenticateToken, (req, res) => {
+  const snapshots = db.prepare(
+    'SELECT * FROM portfolio_snapshots WHERE user_id = ? ORDER BY created_at ASC'
+  ).all(req.userId)
+  res.json(snapshots)
 })
 
 app.listen(PORT, () => {

@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef } from 'react'
 import AssetCard from './AssetCard'
 import ChartModal from './ChartModal'
+import { AssetCardSkeleton } from './Skeleton'
+import AlertModal from './AlertModal'
+import Toast from './Toast'
 
 async function fetchPrice(ticker) {
   const response = await fetch(`http://localhost:3001/api/quote?symbol=${encodeURIComponent(ticker)}`)
@@ -19,6 +22,9 @@ function Dashboard({ assets, setAssets }) {
   const [searchResults, setSearchResults] = useState([])
   const [showDropDown, setShowDropDown] = useState(false)
   const [selectedAsset, setSelectedAsset] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [alertAsset, setAlertAsset] = useState(null)
+  const [toast, setToast] = useState(null)
   const debounceTimer = useRef(null)
   const searchRef = useRef(null)
   const closeTimer = useRef(null)
@@ -49,6 +55,40 @@ function Dashboard({ assets, setAssets }) {
     closeTimer.current = setTimeout(() => setShowDropDown(false), 5000)
   }, [query])
 
+  useEffect(() => {
+    if (assets.length > 0) {
+      setLoading(false)
+    }
+  }, [assets])
+
+  useEffect(() => {
+    const alerts = JSON.parse(localStorage.getItem('alerts') || '[]')
+    if (alerts.length === 0) return
+
+    const remaining = []
+    let triggered = null
+
+    alerts.forEach(alert => {
+      const asset = assets.find(a => a.name === alert.symbol)
+      if (!asset) { remaining.push(alert); return }
+
+      const triggered_above = alert.direction === 'above' && asset.price >= alert.targetPrice
+      const triggered_below = alert.direction === 'below' && asset.price <= alert.targetPrice
+
+      if (triggered_above || triggered_below) {
+        triggered = {
+          message: `${alert.symbol} is ${alert.direction} $${alert.targetPrice.toFixed(2)} — now at $${asset.price.toFixed(2)}`,
+          type: alert.direction
+        }
+      } else {
+        remaining.push(alert)
+      }
+    })
+
+    localStorage.setItem('alerts', JSON.stringify(remaining))
+    if (triggered) setToast(triggered)
+  }, [assets])
+
   async function handleSelectAsset(symbol) {
     setQuery('')
     setSearchResults([])
@@ -62,6 +102,12 @@ function Dashboard({ assets, setAssets }) {
 
   function handleRemoveAsset(name) {
     setAssets(assets.filter((asset) => asset.name !== name))
+  }
+
+  function handleSaveAlert(alert) {
+    const alerts = JSON.parse(localStorage.getItem('alerts') || '[]')
+    alerts.push(alert)
+    localStorage.setItem('alerts', JSON.stringify(alerts))
   }
 
   return (
@@ -93,16 +139,19 @@ function Dashboard({ assets, setAssets }) {
         )}
       </div>
 
-      {/* Asset cards */}
-      <div className="grid grid-cols-3 gap-4">
-        {assets.map((asset) => (
-          <AssetCard
-            key={asset.name} name={asset.name}
-            price={asset.price} change={asset.change}
-            onRemove={() => handleRemoveAsset(asset.name)}
-            onClick={() => setSelectedAsset(asset)}
-          />
-        ))}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {loading && assets.length === 0
+          ? Array(8).fill(0).map((_, i) => <AssetCardSkeleton key={i} />)
+          : assets.map((asset) => (
+            <AssetCard
+              key={asset.name} name={asset.name}
+              price={asset.price} change={asset.change}
+              onRemove={() => handleRemoveAsset(asset.name)}
+              onClick={() => setSelectedAsset(asset)}
+              onAlert={() => setAlertAsset(asset)}
+            />
+          ))
+        }
       </div>
 
       {selectedAsset && (
@@ -113,6 +162,24 @@ function Dashboard({ assets, setAssets }) {
           onClose={() => setSelectedAsset(null)}
         />
       )}
+
+      {alertAsset && (
+        <AlertModal
+          symbol={alertAsset.name}
+          currentPrice={alertAsset.price}
+          onSave={handleSaveAlert}
+          onClose={() => setAlertAsset(null)}
+        />
+      )}
+
+      {toast && (
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast(null)}
+        />
+      )}
+
     </div>
   )
 }

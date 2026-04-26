@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import ChartModal from './ChartModal'
+import { PositionSkeleton } from './Skeleton'
+import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 
 async function fetchPortfolio(token) {
   const response = await fetch('http://localhost:3001/api/portfolio', {
@@ -17,6 +19,25 @@ async function fetchTransactionSummary(token) {
 
 async function fetchTransactions(token) {
   const response = await fetch('http://localhost:3001/api/transactions', {
+    headers: { 'Authorization': `Bearer ${token}` }
+  })
+  return await response.json()
+}
+
+async function saveSnapshot(token, totalValue) {
+  if (totalValue <= 0) return
+  await fetch('http://localhost:3001/api/portfolio/snapshot', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ total_value: totalValue })
+  })
+}
+
+async function fetchSnapshots(token) {
+  const response = await fetch('http://localhost:3001/api/portfolio/snapshots', {
     headers: { 'Authorization': `Bearer ${token}` }
   })
   return await response.json()
@@ -57,6 +78,8 @@ function Portfolio({ token }) {
   const debounceTimer = useRef(null)
   const searchRef = useRef(null)
 
+  const [snapshots, setSnapshots] = useState([])
+
   useEffect(() => {
     loadAll()
   }, [])
@@ -81,16 +104,28 @@ function Portfolio({ token }) {
     }, 300)
   }, [query])
 
+  useEffect(() => {
+    if (Object.keys(prices).length > 0 && positions.length > 0) {
+      const value = positions.reduce((sum, pos) => {
+        const current = prices[pos.symbol]?.price || 0
+        return sum + (current * pos.shares)
+      }, 0)
+      if (value > 0) saveSnapshot(token, value)
+    }
+  }, [prices])
+
   async function loadAll() {
     setLoading(true)
-    const [data, summary, txs] = await Promise.all([
+    const [data, summary, txs, snaps] = await Promise.all([
       fetchPortfolio(token),
       fetchTransactionSummary(token),
-      fetchTransactions(token)
+      fetchTransactions(token),
+      fetchSnapshots(token)
     ])
     setPositions(data)
     setRealizedPnL(summary.total_realized_pnl || 0)
     setTransactions(txs)
+    setSnapshots(snaps)
 
     const priceMap = {}
     await Promise.all(data.map(async (pos) => {
@@ -233,6 +268,35 @@ function Portfolio({ token }) {
         </div>
       </div>
 
+      {/* Portfolio Value Chart */}
+      {snapshots.length > 1 && (
+        <div className="bg-gray-900 rounded-xl p-4 mb-8">
+          <p className="text-gray-400 text-sm mb-3 font-medium">Portfolio Value Over Time</p>
+          <ResponsiveContainer width="100%" height={200}>
+            <AreaChart data={snapshots.map(s => ({
+              date: new Date(s.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+              value: parseFloat(s.total_value.toFixed(2))
+            }))}>
+              <defs>
+                <linearGradient id="portfolioGradient" x1="0" y1="0" x2="0" y2="1">
+                  <stop offset="5%" stopColor="#a855f7" stopOpacity={0.3} />
+                  <stop offset="95%" stopColor="#a855f7" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 10 }} tickLine={false} axisLine={false} />
+              <YAxis tick={{ fill: '#9ca3af', fontSize: 10 }} tickLine={false} axisLine={false} domain={['auto', 'auto']} tickFormatter={(v) => `$${v}`} />
+              <Tooltip
+                contentStyle={{ backgroundColor: '#1f2937', border: 'none', borderRadius: '8px' }}
+                labelStyle={{ color: '#9ca3af' }}
+                itemStyle={{ color: '#ffffff' }}
+                formatter={(v) => [`$${v}`, 'Portfolio Value']}
+              />
+              <Area type="monotone" dataKey="value" stroke="#a855f7" strokeWidth={2} fill="url(#portfolioGradient)" />
+            </AreaChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
       {/* Search bar */}
       <div className="relative mb-6 w-80" ref={searchRef}>
         <input
@@ -294,7 +358,10 @@ function Portfolio({ token }) {
 
       {/* Positions */}
       {loading ? (
-        <p className="text-gray-400">Loading portfolio...</p>
+        <div className="flex flex-col gap-3">
+          <h3 className="text-lg font-semibold text-purple-400">Open Positions</h3>
+          {Array(3).fill(0).map((_, i) => <PositionSkeleton key={i} />)}
+        </div>
       ) : positions.length === 0 && transactions.length === 0 ? (
         <p className="text-gray-400">No positions yet. Search for an asset above to buy.</p>
       ) : (
