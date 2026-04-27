@@ -4,21 +4,21 @@ import { PositionSkeleton } from './Skeleton'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 
 async function fetchPortfolio(token) {
-  const response = await fetch('http://localhost:3001/api/portfolio', {
+  const response = await fetch('${import.meta.env.VITE_API_URL}/api/portfolio', {
     headers: { 'Authorization': `Bearer ${token}` }
   })
   return await response.json()
 }
 
 async function fetchTransactionSummary(token) {
-  const response = await fetch('http://localhost:3001/api/transactions/summary', {
+  const response = await fetch('${import.meta.env.VITE_API_URL}/api/transactions/summary', {
     headers: { 'Authorization': `Bearer ${token}` }
   })
   return await response.json()
 }
 
 async function fetchTransactions(token) {
-  const response = await fetch('http://localhost:3001/api/transactions', {
+  const response = await fetch('${import.meta.env.VITE_API_URL}/api/transactions', {
     headers: { 'Authorization': `Bearer ${token}` }
   })
   return await response.json()
@@ -26,7 +26,7 @@ async function fetchTransactions(token) {
 
 async function saveSnapshot(token, totalValue) {
   if (totalValue <= 0) return
-  await fetch('http://localhost:3001/api/portfolio/snapshot', {
+  await fetch('${import.meta.env.VITE_API_URL}/api/portfolio/snapshot', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -37,20 +37,20 @@ async function saveSnapshot(token, totalValue) {
 }
 
 async function fetchSnapshots(token) {
-  const response = await fetch('http://localhost:3001/api/portfolio/snapshots', {
+  const response = await fetch('${import.meta.env.VITE_API_URL}/api/portfolio/snapshots', {
     headers: { 'Authorization': `Bearer ${token}` }
   })
   return await response.json()
 }
 
 async function fetchPrice(symbol) {
-  const response = await fetch(`http://localhost:3001/api/quote?symbol=${encodeURIComponent(symbol)}`)
+  const response = await fetch(`${import.meta.env.VITE_API_URL}/api/quote?symbol=${encodeURIComponent(symbol)}`)
   const data = await response.json()
   return data
 }
 
 async function searchAssets(query) {
-  const response = await fetch(`http://localhost:3001/api/search?q=${encodeURIComponent(query)}`)
+  const response = await fetch(`${import.meta.env.VITE_API_URL}/api/search?q=${encodeURIComponent(query)}`)
   return await response.json()
 }
 
@@ -152,7 +152,7 @@ function Portfolio({ token }) {
       setAddError('Please enter number of shares')
       return
     }
-    const response = await fetch('http://localhost:3001/api/portfolio', {
+    const response = await fetch('${import.meta.env.VITE_API_URL}/api/portfolio', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -174,7 +174,7 @@ function Portfolio({ token }) {
   }
 
   async function handleSell(id) {
-    const response = await fetch(`http://localhost:3001/api/portfolio/${id}`, {
+    const response = await fetch(`${import.meta.env.VITE_API_URL}/api/portfolio/${id}`, {
       method: 'DELETE',
       headers: { 'Authorization': `Bearer ${token}` }
     })
@@ -189,7 +189,7 @@ function Portfolio({ token }) {
 
   async function handleEditSave(id) {
     const pos = positions.find(p => p.id === id)
-    await fetch(`http://localhost:3001/api/portfolio/${id}`, {
+    await fetch(`${import.meta.env.VITE_API_URL}/api/portfolio/${id}`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',

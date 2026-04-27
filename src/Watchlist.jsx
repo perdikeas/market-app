@@ -5,18 +5,18 @@ import NewsModal from './NewsModal'
 import { useRefreshPrices } from './useRefreshPrices'
 
 async function fetchPrice(ticker) {
-  const response = await fetch(`http://localhost:3001/api/quote?symbol=${encodeURIComponent(ticker)}`)
+  const response = await fetch(`${import.meta.env.VITE_API_URL}/api/quote?symbol=${encodeURIComponent(ticker)}`)
   const data = await response.json()
   return data
 }
 
 async function searchAssets(query) {
-  const response = await fetch(`http://localhost:3001/api/search?q=${encodeURIComponent(query)}`)
+  const response = await fetch(`${import.meta.env.VITE_API_URL}/api/search?q=${encodeURIComponent(query)}`)
   return await response.json()
 }
 
 async function fetchHot() {
-  const response = await fetch('http://localhost:3001/api/hot')
+  const response = await fetch('${import.meta.env.VITE_API_URL}/api/hot')
   return await response.json()
 }
 

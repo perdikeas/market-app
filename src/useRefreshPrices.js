@@ -1,7 +1,7 @@
 import {useEffect, useRef} from 'react'
 
 async function fetchPrice(ticker){
-    const response = await fetch(`http://localhost:3001/api/quote?symbol=${encodeURIComponent(ticker)}`)
+    const response = await fetch(`${import.meta.env.VITE_API_URL}/api/quote?symbol=${encodeURIComponent(ticker)}`)
     const data = await response.json()
     return data
 }

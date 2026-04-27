@@ -2,14 +2,14 @@ import { useEffect, useState } from 'react'
 
 async function fetchNews(symbol) {
     const cleanSymbol = symbol.includes(':') ? symbol.split(':')[1] : symbol
-    const response = await fetch(`http://localhost:3001/api/news/${encodeURIComponent(cleanSymbol)}`)
+    const response = await fetch(`${import.meta.env.VITE_API_URL}/api/news/${encodeURIComponent(cleanSymbol)}`)
     return await response.json()
 }
 
 async function fetchStockTwits(symbol) {
     console.log('fetchStockTwits called for:', symbol)
     const cleanSymbol = symbol.includes(':') ? symbol.split(':')[1].replace('USDT', '') : symbol
-    const response = await fetch(`http://localhost:3001/api/stocktwits/${encodeURIComponent(cleanSymbol)}`)
+    const response = await fetch(`${import.meta.env.VITE_API_URL}/api/stocktwits/${encodeURIComponent(cleanSymbol)}`)
     return await response.json()
 }
 

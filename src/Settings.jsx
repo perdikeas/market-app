@@ -22,7 +22,7 @@ function Settings({ assets, setAssets, token, onLogout }) {
       setPasswordError('New passwords do not match')
       return
     }
-    const response = await fetch('http://localhost:3001/api/auth/password', {
+    const response = await fetch('${import.meta.env.VITE_API_URL}/api/auth/password', {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -44,7 +44,7 @@ function Settings({ assets, setAssets, token, onLogout }) {
   async function handleDeleteAccount() {
     const confirmed = window.confirm('Are you sure? This will permanently delete your account, portfolio and all transaction history.')
     if (!confirmed) return
-    await fetch('http://localhost:3001/api/auth/account', {
+    await fetch('${import.meta.env.VITE_API_URL}/api/auth/account', {
       method: 'DELETE',
       headers: { 'Authorization': `Bearer ${token}` }
     })
@@ -71,7 +71,7 @@ function Settings({ assets, setAssets, token, onLogout }) {
   }
 
   async function handleExportCSV() {
-    const response = await fetch('http://localhost:3001/api/transactions/export', {
+    const response = await fetch('${import.meta.env.VITE_API_URL}/api/transactions/export', {
       headers: { 'Authorization': `Bearer ${token}` }
     })
     const blob = await response.blob()

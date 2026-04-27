@@ -12,7 +12,7 @@ function Login({ onLogin}){
         setLoading(true)
         
         try{
-            const response = await fetch(`http://localhost:3001/api/auth/${mode}`, {
+            const response = await fetch(`${import.meta.env.VITE_API_URL}/api/auth/${mode}`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json'}, 
                 body: JSON.stringify({ email, password})

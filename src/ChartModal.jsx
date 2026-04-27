@@ -86,13 +86,13 @@ function SentimentGauge({ score }) {
 }
 
 async function fetchCandles(symbol) {
-  const response = await fetch(`http://localhost:3001/api/candles?symbol=${encodeURIComponent(symbol)}`)
+  const response = await fetch(`${import.meta.env.VITE_API_URL}/api/candles?symbol=${encodeURIComponent(symbol)}`)
   return await response.json()
 }
 
 async function fetchNewsAndQuote(symbol) {
   const cleanSymbol = symbol.includes(':') ? symbol.split(':')[1] : symbol
-  const response = await fetch(`http://localhost:3001/api/news/${encodeURIComponent(cleanSymbol)}`)
+  const response = await fetch(`${import.meta.env.VITE_API_URL}/api/news/${encodeURIComponent(cleanSymbol)}`)
   return await response.json()
 }
 
@@ -133,7 +133,7 @@ Format as JSON array:
 }]
 Only return the JSON array, nothing else.`
 
-  const response = await fetch('http://localhost:3001/api/generate', {
+  const response = await fetch('${import.meta.env.VITE_API_URL}/api/generate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
