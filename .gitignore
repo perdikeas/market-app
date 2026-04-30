@@ -29,3 +29,8 @@ server/database.db
 server/database.db-shm
 server/database.db-wal
 .env.production
+venv/
+__pycache__/
+*.pyc
+backtest-service/.env
+data_cache/
