@@ -36,13 +36,15 @@ app.add_middleware(
 
 
 # ─── Request / Response Models ────────────────────────────────────────────────
-
 class BacktestRequest(BaseModel):
     symbol: str = Field(..., description="Ticker symbol, e.g. AAPL")
     strategy: str = Field(..., description="Strategy key from /strategies")
     period: str = Field("1y", description="Lookback period: 1mo, 3mo, 6mo, 1y, 2y, 5y")
     initial_capital: float = Field(10000.0, ge=100, description="Starting capital in USD")
     params: Optional[dict] = Field(default_factory=dict, description="Strategy-specific parameters")
+    min_holding_days: int = Field(1, ge=1, description="Minimum days to hold a position")
+    atr_multiplier: float = Field(3.0, ge=0.0, description="ATR stop loss multiplier")
+    max_drawdown_pct: float = Field(100.0, ge=1.0, description="Circuit breaker max drawdown %")
 
 
 # ─── Routes ───────────────────────────────────────────────────────────────────
@@ -122,6 +124,9 @@ def backtest(req: BacktestRequest):
             symbol=req.symbol.upper(),
             strategy_name=strategy_meta["name"],
             initial_capital=req.initial_capital,
+            min_holding_days=req.min_holding_days,
+            atr_multiplier=req.atr_multiplier,
+            max_drawdown_pct=req.max_drawdown_pct,
         )
     except Exception as e:
         traceback.print_exc()

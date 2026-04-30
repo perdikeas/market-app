@@ -1,62 +1,65 @@
 """
-Data Layer - Alpha Vantage
+Data Layer - yfinance
+Free, no API key needed, returns 20+ years of data.
 """
-import json, os, hashlib, urllib.request
+import json, os, hashlib
 import pandas as pd
-from datetime import date, timedelta, datetime
+import yfinance as yf
+from datetime import datetime
 from dotenv import load_dotenv
- 
+
 load_dotenv()
-ALPHA_VANTAGE_KEY = os.getenv("ALPHA_VANTAGE_KEY", "demo")
 CACHE_DIR = "./data_cache"
 os.makedirs(CACHE_DIR, exist_ok=True)
- 
-PERIOD_DAYS = {"1mo":30,"3mo":90,"6mo":99,"1y":99,"2y":99,"5y":99}
- 
+
+PERIOD_MAP = {
+    "1mo":  "1mo",
+    "3mo":  "3mo",
+    "6mo":  "6mo",
+    "1y":   "1y",
+    "2y":   "2y",
+    "5y":   "5y",
+}
+
 def _cache_path(symbol, period):
     key = hashlib.md5(f"{symbol}_{period}".encode()).hexdigest()
     return os.path.join(CACHE_DIR, f"{key}.json")
- 
+
 def _is_fresh(path):
     if not os.path.exists(path): return False
-    return datetime.fromtimestamp(os.path.getmtime(path)).date() == date.today()
- 
+    return datetime.fromtimestamp(os.path.getmtime(path)).date() == datetime.today().date()
+
 def fetch_ohlcv(symbol: str, period: str = "1y") -> pd.DataFrame:
-    if period not in PERIOD_DAYS:
-        raise ValueError(f"Invalid period. Valid: {list(PERIOD_DAYS)}")
- 
+    if period not in PERIOD_MAP:
+        raise ValueError(f"Invalid period. Valid: {list(PERIOD_MAP)}")
+
     cache_path = _cache_path(symbol, period)
     if _is_fresh(cache_path):
         with open(cache_path) as f: records = json.load(f)
         df = pd.DataFrame(records)
         df["date"] = pd.to_datetime(df["date"])
         return df.set_index("date")
- 
-    output_size = "compact"
-    url = (f"https://www.alphavantage.co/query?function=TIME_SERIES_DAILY"
-           f"&symbol={symbol}&outputsize={output_size}&apikey={ALPHA_VANTAGE_KEY}")
- 
-    with urllib.request.urlopen(url) as resp:
-        raw = json.loads(resp.read().decode())
- 
-    if "Time Series (Daily)" not in raw:
-        info = raw.get("Information") or raw.get("Note") or str(raw)
-        raise ValueError(f"No data for '{symbol}': {info[:200]}")
- 
-    rows = [{"date": pd.Timestamp(d),
-             "open": float(v["1. open"]), "high": float(v["2. high"]),
-             "low": float(v["3. low"]),  "close": float(v["4. close"]),
-             "volume": float(v["5. volume"])}
-            for d, v in raw["Time Series (Daily)"].items()]
- 
-    df = pd.DataFrame(rows).sort_values("date").set_index("date")
-    cutoff = pd.Timestamp(date.today() - timedelta(days=PERIOD_DAYS[period]))
-    df = df[df.index >= cutoff]
- 
+
+    raw = yf.download(symbol, period=period, progress=False, auto_adjust=True)
+
+    if raw.empty:
+        raise ValueError(f"No data found for '{symbol}'")
+
+    # Fix yfinance MultiIndex columns (newer versions return ("Close", "AAPL") etc.)
+    if isinstance(raw.columns, pd.MultiIndex):
+        raw.columns = raw.columns.droplevel(1)
+
+    df = raw[["Open", "High", "Low", "Close", "Volume"]].copy()
+    df.columns = ["open", "high", "low", "close", "volume"]
+    df.index.name = "date"
+    df.dropna(inplace=True)
+
     if len(df) < 20:
         raise ValueError(f"Not enough data for '{symbol}' ({len(df)} rows)")
- 
+
     records = df.reset_index()
     records["date"] = records["date"].astype(str)
-    with open(cache_path, "w") as f: json.dump(records.to_dict(orient="records"), f)
+    with open(cache_path, "w") as f:
+        json.dump(records.to_dict(orient="records"), f)
+
     return df

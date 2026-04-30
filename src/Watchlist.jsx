@@ -16,7 +16,7 @@ async function searchAssets(query) {
 }
 
 async function fetchHot() {
-  const response = await fetch('${import.meta.env.VITE_API_URL}/api/hot')
+  const response = await fetch(`${import.meta.env.VITE_API_URL}/api/hot`)
   return await response.json()
 }
 

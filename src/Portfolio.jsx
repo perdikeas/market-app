@@ -4,21 +4,21 @@ import { PositionSkeleton } from './Skeleton'
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts'
 
 async function fetchPortfolio(token) {
-  const response = await fetch('${import.meta.env.VITE_API_URL}/api/portfolio', {
+  const response = await fetch(`${import.meta.env.VITE_API_URL}/api/portfolio`, {
     headers: { 'Authorization': `Bearer ${token}` }
   })
   return await response.json()
 }
 
 async function fetchTransactionSummary(token) {
-  const response = await fetch('${import.meta.env.VITE_API_URL}/api/transactions/summary', {
+  const response = await fetch(`${import.meta.env.VITE_API_URL}/api/transactions/summary`, {
     headers: { 'Authorization': `Bearer ${token}` }
   })
   return await response.json()
 }
 
 async function fetchTransactions(token) {
-  const response = await fetch('${import.meta.env.VITE_API_URL}/api/transactions', {
+  const response = await fetch(`${import.meta.env.VITE_API_URL}/api/transactions`, {
     headers: { 'Authorization': `Bearer ${token}` }
   })
   return await response.json()
@@ -26,7 +26,7 @@ async function fetchTransactions(token) {
 
 async function saveSnapshot(token, totalValue) {
   if (totalValue <= 0) return
-  await fetch('${import.meta.env.VITE_API_URL}/api/portfolio/snapshot', {
+  await fetch(`${import.meta.env.VITE_API_URL}/api/portfolio/snapshot`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -37,7 +37,7 @@ async function saveSnapshot(token, totalValue) {
 }
 
 async function fetchSnapshots(token) {
-  const response = await fetch('${import.meta.env.VITE_API_URL}/api/portfolio/snapshots', {
+  const response = await fetch(`${import.meta.env.VITE_API_URL}/api/portfolio/snapshots`, {
     headers: { 'Authorization': `Bearer ${token}` }
   })
   return await response.json()
@@ -152,7 +152,7 @@ function Portfolio({ token }) {
       setAddError('Please enter number of shares')
       return
     }
-    const response = await fetch('${import.meta.env.VITE_API_URL}/api/portfolio', {
+    const response = await fetch(`${import.meta.env.VITE_API_URL}/api/portfolio`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

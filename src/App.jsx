@@ -6,6 +6,7 @@ import Watchlist from './Watchlist'
 import Settings from './Settings'
 import Login from './Login'
 import ErrorBoundary from './ErrorBoundary'
+import Backtest from './Backtest'
 
 async function fetchPrice(ticker) {
   const response = await fetch(`${import.meta.env.VITE_API_URL}/api/quote?symbol=${encodeURIComponent(ticker)}`)
@@ -75,6 +76,7 @@ function App() {
     { id: 'dashboard', label: 'Dashboard' },
     { id: 'portfolio', label: 'Portfolio' },
     { id: 'watchlist', label: 'Watchlist' },
+    {id: 'backtest', label: 'Backtest'},
     { id: 'settings', label: 'Settings' },
   ]
 
@@ -144,6 +146,7 @@ function App() {
           {currentTab === 'dashboard' && <Dashboard assets={assets} setAssets={setAssets} />}
           {currentTab === 'portfolio' && <Portfolio assets={assets} token={token} />}
           {currentTab === 'watchlist' && <Watchlist />}
+          {currentTab === 'backtest' && <Backtest />}
           {currentTab === 'settings' && (
             <Settings
               assets={assets}

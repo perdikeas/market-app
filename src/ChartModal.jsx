@@ -133,7 +133,7 @@ Format as JSON array:
 }]
 Only return the JSON array, nothing else.`
 
-  const response = await fetch('${import.meta.env.VITE_API_URL}/api/generate', {
+  const response = await fetch(`${import.meta.env.VITE_API_URL}/api/generate`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
