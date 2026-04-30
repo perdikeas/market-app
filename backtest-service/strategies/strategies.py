@@ -44,6 +44,197 @@ def _rsi_series(close: pd.Series, period: int = 14) -> pd.Series:
 def regime_filter(df, period=200):
     return df["close"] > df["close"].rolling(period).mean()
 
+# ─────────────────────────────────────────────
+# ML Helpers
+# ─────────────────────────────────────────────
+
+def build_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Computes technical indicator features for each trading day.
+    Returns a DataFrame aligned to df.index.
+    All features are normalized/ratio-based so they work across
+    different price levels and time periods.
+    """
+    close  = df["close"]
+    high   = df["high"]
+    low    = df["low"]
+    volume = df["volume"]
+
+    feat = pd.DataFrame(index=df.index)
+
+    # ── Momentum ──────────────────────────────
+    feat["rsi_14"] = _rsi_series(close, 14)
+    feat["rsi_7"]  = _rsi_series(close, 7)
+
+    # ── MACD ──────────────────────────────────
+    ema_12 = close.ewm(span=12, adjust=False).mean()
+    ema_26 = close.ewm(span=26, adjust=False).mean()
+    macd_line   = ema_12 - ema_26
+    signal_line = macd_line.ewm(span=9, adjust=False).mean()
+    feat["macd"]      = macd_line / close          # normalize by price
+    feat["macd_signal"] = signal_line / close
+    feat["macd_hist"] = (macd_line - signal_line) / close
+
+    # ── Trend: distance from moving averages ──
+    sma_20  = close.rolling(20).mean()
+    sma_50  = close.rolling(50).mean()
+    sma_200 = close.rolling(200).mean()
+    feat["sma_dist_20"]  = (close - sma_20)  / sma_20   # % above/below
+    feat["sma_dist_50"]  = (close - sma_50)  / sma_50
+    feat["sma_dist_200"] = (close - sma_200) / sma_200
+    feat["above_200"]    = (close > sma_200).astype(int)
+
+    # ── Volatility ────────────────────────────
+    atr = compute_atr(df, 14)
+    feat["atr_pct"] = atr / close                  # ATR as % of price
+
+    std_20 = close.rolling(20).std()
+    bb_upper = sma_20 + 2 * std_20
+    bb_lower = sma_20 - 2 * std_20
+    bb_width = (bb_upper - bb_lower) / sma_20
+    feat["bb_width"] = bb_width
+    feat["bb_position"] = (close - bb_lower) / (bb_upper - bb_lower + 1e-9)
+
+    # ── Volume ────────────────────────────────
+    vol_avg_20 = volume.rolling(20).mean()
+    feat["volume_ratio"] = volume / (vol_avg_20 + 1)  # +1 avoids division by zero
+
+    # On-balance volume slope
+    obv = (np.sign(close.diff()) * volume).fillna(0).cumsum()
+    obv_slope = obv - obv.shift(10)
+    feat["obv_slope"] = obv_slope / (vol_avg_20 * 10 + 1)  # normalize
+
+    # ── Price patterns ────────────────────────
+    feat["return_1d"]  = close.pct_change(1)
+    feat["return_5d"]  = close.pct_change(5)
+    feat["return_20d"] = close.pct_change(20)
+
+    # Where did price close within today's high-low range?
+    day_range = (high - low).replace(0, np.nan)
+    feat["close_position"] = (close - low) / day_range   # 0=closed at low, 1=at high
+    feat["high_low_ratio"] = day_range / close            # range as % of price
+
+    # ── Calendar ─────────────────────────────
+    feat["day_of_week"] = df.index.dayofweek   # 0=Mon, 4=Fri
+    feat["month"]       = df.index.month
+
+    return feat
+
+def build_targets(df: pd.DataFrame, forward_days: int = 5,
+                  threshold: float = 0.02) -> pd.Series:
+    """
+    For each day, looks forward N days and labels it:
+      +1 if price rises more than threshold  (buy)
+      -1 if price falls more than threshold  (sell)
+       0 if price stays within threshold     (hold)
+
+    The last forward_days rows will be NaN — they have no future yet.
+    These are dropped before training.
+    """
+    close = df["close"]
+    future_return = close.shift(-forward_days) / close - 1
+
+    target = pd.Series(0, index=df.index)
+    target[future_return >  threshold] =  1
+    target[future_return < -threshold] = -1
+    target[future_return.isna()]       =  np.nan
+
+    return target
+
+def walk_forward_predict(features: pd.DataFrame, targets: pd.Series,
+                         min_train_days: int = 200,
+                         retrain_every: int = 63) -> pd.Series:
+    """
+    Walk-forward validation — the only honest way to backtest an ML model.
+
+    Timeline:
+      [──── train (min 2 years) ────][─ predict 63 days ─]
+                [──── train ────────────][─ predict 63 days ─]
+                          [──── train ──────────────][─ predict ─]
+
+    We never predict on data the model was trained on.
+    We retrain every retrain_every days (default ~1 quarter).
+    """
+    try:
+        import lightgbm as lgb
+    except ImportError:
+        raise ImportError("Run: pip install lightgbm --break-system-packages")
+
+    from sklearn.preprocessing import LabelEncoder
+
+    signals = pd.Series(0, index=features.index)
+
+    # Drop NaN rows (warmup period + last forward_days rows)
+    valid_mask = targets.notna() & features.notna().all(axis=1)
+    feat_clean = features[valid_mask]
+    targ_clean = targets[valid_mask]
+
+    n = len(feat_clean)
+    if n < min_train_days + retrain_every:
+        print(f"Not enough data: need {min_train_days + retrain_every} days, got {n}")
+        return signals
+
+    # Encode targets: -1 → 0, 0 → 1, 1 → 2 (LightGBM needs 0-indexed classes)
+    le = LabelEncoder()
+    targ_encoded = le.fit_transform(targ_clean)   # learns [-1, 0, 1] → [0, 1, 2]
+
+    model = None
+    predict_start = min_train_days
+
+    for i in range(predict_start, n, retrain_every):
+        # ── Retrain on everything up to i ──
+        X_train = feat_clean.iloc[:i]
+        y_train = targ_encoded[:i]
+
+        model = lgb.LGBMClassifier(
+            n_estimators=200,
+            learning_rate=0.05,
+            max_depth=4,           # shallow trees — prevents overfitting
+            num_leaves=15,
+            min_child_samples=20,  # need at least 20 samples per leaf
+            subsample=0.8,         # use 80% of rows per tree
+            colsample_bytree=0.8,  # use 80% of features per tree
+            class_weight='balanced',  # handles unequal class sizes
+            random_state=42,
+            verbose=-1             # suppress output
+        )
+        model.fit(X_train, y_train)
+
+        # ── Predict next retrain_every days ──
+        predict_end = min(i + retrain_every, n)
+        X_pred = feat_clean.iloc[i:predict_end]
+
+        if len(X_pred) == 0:
+            continue
+
+        pred_encoded = model.predict(X_pred)
+        pred_labels  = le.inverse_transform(pred_encoded)  # back to -1, 0, 1
+
+        # ── Write predictions to signal series ──
+        signal_dates = feat_clean.index[i:predict_end]
+        for date, label in zip(signal_dates, pred_labels):
+            signals[date] = int(label)
+
+    return signals
+
+
+#Machine learning model that trains on trading data
+def lightgbm_signal(df: pd.DataFrame, forward_days: int = 5,
+                    threshold: float = 0.02, min_train_days: int = 200,
+                    retrain_every: int = 63) -> pd.Series:
+    """
+    ML-based signal using LightGBM gradient boosting.
+    Uses walk-forward validation — never trains on future data.
+    
+    Requires at least 3-5 years of data to generate meaningful signals.
+    Use period='5y' for best results.
+    """
+    features = build_features(df)
+    targets  = build_targets(df, forward_days=forward_days, threshold=threshold)
+    signals  = walk_forward_predict(features, targets,
+                                    min_train_days=min_train_days,
+                                    retrain_every=retrain_every)
+    return signals
 
 # ─────────────────────────────────────────────
 # 1. SMA Crossover
@@ -548,6 +739,16 @@ STRATEGIES = {
         "params": {
             "lookback":            {"type": "int",   "default": 20,   "min": 5,    "max": 60,  "label": "VWAP Lookback"},
             "deviation_threshold": {"type": "float", "default": 0.02, "min": 0.005,"max": 0.1, "label": "Deviation Threshold"},
+        }
+    },
+    "lightgbm": {
+        "fn": lightgbm_signal,
+        "name": "LightGBM ML Signal",
+        "description": "Gradient boosting model trained on 20 technical indicators. Uses walk-forward validation to prevent lookahead bias. Requires 5y period.",
+        "params": {
+            "forward_days":   {"type": "int",   "default": 5,    "min": 3,    "max": 20,   "label": "Forecast Horizon (days)"},
+            "threshold":      {"type": "float", "default": 0.02, "min": 0.01, "max": 0.05, "label": "Signal Threshold"},
+            "retrain_every":  {"type": "int",   "default": 63,   "min": 21,   "max": 126,  "label": "Retrain Frequency (days)"},
         }
     },
 }

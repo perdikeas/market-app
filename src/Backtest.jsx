@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import {
   LineChart, Line, XAxis, YAxis, Tooltip,
   ResponsiveContainer, Legend, ReferenceLine
@@ -30,10 +30,6 @@ function MetricCard({ label, value, positive }) {
   )
 }
 
-/**
- * A slider that works for both int and float params.
- * Shows the current value inline and the min/max at each end.
- */
 function ParamSlider({ name, schema, value, onChange }) {
   const step = schema.type === 'float'
     ? parseFloat(((schema.max - schema.min) / 100).toPrecision(2))
@@ -41,7 +37,6 @@ function ParamSlider({ name, schema, value, onChange }) {
 
   const [draft, setDraft] = useState(String(value))
 
-  // Keep draft in sync if parent resets params (e.g. strategy change)
   useEffect(() => { setDraft(String(value)) }, [value])
 
   function commit(raw) {
@@ -131,19 +126,26 @@ function EngineSlider({ label, hint, min, max, step, value, onChange, displayFn 
 // ─── Main component ────────────────────────────────────────────────────────
 
 export default function Backtest() {
-  // ── Fetch config
-  const [strategies, setStrategies]     = useState([])
-  const [symbol, setSymbol]             = useState('AAPL')
-  const [strategy, setStrategy]         = useState('')
-  const [period, setPeriod]             = useState('1y')
-  const [capital, setCapital]           = useState(10000)
+  // ── Core state
+  const [strategies, setStrategies]         = useState([])
+  const [symbol, setSymbol]                 = useState('AAPL')
+  const [strategy, setStrategy]             = useState('')
+  const [period, setPeriod]                 = useState('1y')
+  const [capital, setCapital]               = useState(10000)
   const [strategyParams, setStrategyParams] = useState({})
-  const [showAdvanced, setShowAdvanced] = useState(false)
+  const [showAdvanced, setShowAdvanced]     = useState(false)
+
+  // ── Ticker search
+  const [tickerQuery, setTickerQuery]               = useState('AAPL')
+  const [tickerResults, setTickerResults]           = useState([])
+  const [showTickerDropdown, setShowTickerDropdown] = useState(false)
+  const tickerDebounce = useRef(null)
+  const tickerRef      = useRef(null)
 
   // ── Engine risk controls
-  const [atrMultiplier, setAtrMultiplier]     = useState(3.0)
-  const [minHoldingDays, setMinHoldingDays]   = useState(1)
-  const [maxDrawdownPct, setMaxDrawdownPct]   = useState(100)
+  const [atrMultiplier, setAtrMultiplier]   = useState(3.0)
+  const [minHoldingDays, setMinHoldingDays] = useState(1)
+  const [maxDrawdownPct, setMaxDrawdownPct] = useState(100)
 
   // ── Result state
   const [result, setResult]   = useState(null)
@@ -170,6 +172,39 @@ export default function Backtest() {
     const meta = strategies.find(s => s.key === strategy)
     if (meta) setStrategyParams(defaultsFor(meta))
   }, [strategy, strategies])
+
+  // Close ticker dropdown on outside click
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (tickerRef.current && !tickerRef.current.contains(e.target)) {
+        setShowTickerDropdown(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
+  // Search as user types in ticker box
+  useEffect(() => {
+    if (!tickerQuery || tickerQuery.length < 1) {
+      setTickerResults([])
+      setShowTickerDropdown(false)
+      return
+    }
+    clearTimeout(tickerDebounce.current)
+    tickerDebounce.current = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `${import.meta.env.VITE_API_URL}/api/search?q=${encodeURIComponent(tickerQuery)}`
+        )
+        const data = await res.json()
+        setTickerResults(data.slice(0, 6))
+        setShowTickerDropdown(true)
+      } catch {
+        // silently fail — user can still type manually
+      }
+    }, 300)
+  }, [tickerQuery])
 
   function defaultsFor(meta) {
     const out = {}
@@ -225,17 +260,40 @@ export default function Backtest() {
       {/* ── Control panel ──────────────────────────────────────────────── */}
       <div className="bg-gray-900 rounded-xl p-5 flex flex-col gap-5">
 
-        {/* Row 1: symbol / strategy / period / capital / run */}
+        {/* Row 1: ticker / strategy / period / capital / run */}
         <div className="flex flex-wrap gap-4 items-end">
 
-          <div className="flex flex-col gap-1">
+          {/* Ticker with search dropdown */}
+          <div className="flex flex-col gap-1 relative" ref={tickerRef}>
             <label className="text-gray-400 text-xs">Ticker</label>
             <input
-              className="bg-gray-800 text-white px-3 py-2 rounded-lg w-28 uppercase tracking-widest"
-              value={symbol}
-              onChange={e => setSymbol(e.target.value.toUpperCase())}
+              className="bg-gray-800 text-white px-3 py-2 rounded-lg w-36 uppercase tracking-widest"
+              value={tickerQuery}
+              onChange={e => {
+                const val = e.target.value.toUpperCase()
+                setTickerQuery(val)
+                setSymbol(val)
+              }}
               placeholder="AAPL"
             />
+            {showTickerDropdown && tickerResults.length > 0 && (
+              <div className="absolute top-full mt-1 w-72 bg-gray-800 rounded-lg shadow-lg z-50 overflow-hidden">
+                {tickerResults.map(r => (
+                  <div
+                    key={r.symbol}
+                    onMouseDown={() => {
+                      setSymbol(r.symbol)
+                      setTickerQuery(r.symbol)
+                      setShowTickerDropdown(false)
+                    }}
+                    className="px-4 py-2 hover:bg-gray-700 cursor-pointer flex items-center gap-2"
+                  >
+                    <span className="font-bold text-white text-sm">{r.displaySymbol}</span>
+                    <span className="text-gray-400 text-xs truncate">{r.description}</span>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="flex flex-col gap-1">
@@ -367,7 +425,6 @@ export default function Backtest() {
       {/* ── Results ────────────────────────────────────────────────────── */}
       {result && (
         <>
-          {/* Metrics grid */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
             <MetricCard
               label="Total Return"
