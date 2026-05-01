@@ -7,21 +7,21 @@ import {
 const BACKTEST_URL = import.meta.env.VITE_BACKTEST_URL || 'http://localhost:8000'
 
 const PERIODS = [
-  { label: '1 Month',  value: '1mo' },
+  { label: '1 Month', value: '1mo' },
   { label: '3 Months', value: '3mo' },
   { label: '6 Months', value: '6mo' },
-  { label: '1 Year',   value: '1y'  },
-  { label: '2 Years',  value: '2y'  },
-  { label: '5 Years',  value: '5y'  },
+  { label: '1 Year', value: '1y' },
+  { label: '2 Years', value: '2y' },
+  { label: '5 Years', value: '5y' },
 ]
 
 // ─── Sub-components ────────────────────────────────────────────────────────
 
 function MetricCard({ label, value, positive }) {
   const color =
-    positive === null  ? 'text-white'
-    : positive         ? 'text-green-400'
-    :                    'text-red-400'
+    positive === null ? 'text-white'
+      : positive ? 'text-green-400'
+        : 'text-red-400'
   return (
     <div className="bg-gray-800 rounded-xl p-4 flex flex-col gap-1">
       <span className="text-gray-400 text-xs">{label}</span>
@@ -127,30 +127,34 @@ function EngineSlider({ label, hint, min, max, step, value, onChange, displayFn 
 
 export default function Backtest() {
   // ── Core state
-  const [strategies, setStrategies]         = useState([])
-  const [symbol, setSymbol]                 = useState('AAPL')
-  const [strategy, setStrategy]             = useState('')
-  const [period, setPeriod]                 = useState('1y')
-  const [capital, setCapital]               = useState(10000)
+  const [strategies, setStrategies] = useState([])
+  const [symbol, setSymbol] = useState('AAPL')
+  const [strategy, setStrategy] = useState('')
+  const [period, setPeriod] = useState('1y')
+  const [capital, setCapital] = useState(10000)
   const [strategyParams, setStrategyParams] = useState({})
-  const [showAdvanced, setShowAdvanced]     = useState(false)
+  const [showAdvanced, setShowAdvanced] = useState(false)
 
   // ── Ticker search
-  const [tickerQuery, setTickerQuery]               = useState('AAPL')
-  const [tickerResults, setTickerResults]           = useState([])
+  const [tickerQuery, setTickerQuery] = useState('AAPL')
+  const [tickerResults, setTickerResults] = useState([])
   const [showTickerDropdown, setShowTickerDropdown] = useState(false)
   const tickerDebounce = useRef(null)
-  const tickerRef      = useRef(null)
+  const tickerRef = useRef(null)
 
   // ── Engine risk controls
-  const [atrMultiplier, setAtrMultiplier]   = useState(3.0)
+  const [atrMultiplier, setAtrMultiplier] = useState(3.0)
   const [minHoldingDays, setMinHoldingDays] = useState(1)
   const [maxDrawdownPct, setMaxDrawdownPct] = useState(100)
 
   // ── Result state
-  const [result, setResult]   = useState(null)
+  const [result, setResult] = useState(null)
   const [loading, setLoading] = useState(false)
-  const [error, setError]     = useState(null)
+  const [error, setError] = useState(null)
+
+  //Feature importance state
+  const [featureImportance, setFeatureImportance] = useState(null)
+  const [fiLoading, setFiLoading] = useState(false)
 
   // Load strategy list on mount
   useEffect(() => {
@@ -219,11 +223,36 @@ export default function Backtest() {
   const selectedStrategy = strategies.find(s => s.key === strategy)
   const hasParams = selectedStrategy && Object.keys(selectedStrategy.params).length > 0
 
+  async function fetchFeatureImportance() {
+    setFiLoading(true)
+    try {
+      const res = await fetch(`${BACKTEST_URL}/feature-importance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol,
+          strategy,
+          period,
+          initial_capital: capital,
+          params: strategyParams,
+        }),
+      })
+      if (!res.ok) throw new Error('Failed to fetch feature importance')
+      const data = await res.json()
+      setFeatureImportance(data.feature_importance)
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setFiLoading(false)
+    }
+  }
+
   // ── Run backtest
   async function runBacktest() {
     setLoading(true)
     setError(null)
     setResult(null)
+    setFeatureImportance(null)
     try {
       const res = await fetch(`${BACKTEST_URL}/backtest`, {
         method: 'POST',
@@ -234,7 +263,7 @@ export default function Backtest() {
           period,
           initial_capital: capital,
           params: strategyParams,
-          atr_multiplier:   atrMultiplier,
+          atr_multiplier: atrMultiplier,
           min_holding_days: minHoldingDays,
           max_drawdown_pct: maxDrawdownPct,
         }),
@@ -552,13 +581,12 @@ export default function Backtest() {
                           {t.pnl_pct >= 0 ? '+' : ''}{t.pnl_pct}%
                         </td>
                         <td className="py-2">
-                          <span className={`text-xs px-2 py-0.5 rounded-full ${
-                            t.exit_reason === 'stop_loss'
-                              ? 'bg-red-900 text-red-300'
-                              : t.exit_reason === 'end_of_period'
+                          <span className={`text-xs px-2 py-0.5 rounded-full ${t.exit_reason === 'stop_loss'
+                            ? 'bg-red-900 text-red-300'
+                            : t.exit_reason === 'end_of_period'
                               ? 'bg-gray-700 text-gray-400'
                               : 'bg-gray-800 text-gray-500'
-                          }`}>
+                            }`}>
                             {t.exit_reason}
                           </span>
                         </td>
@@ -567,6 +595,76 @@ export default function Backtest() {
                   </tbody>
                 </table>
               </div>
+            </div>
+          )}
+
+          {/* Feature Importance — only for LightGBM and Ensemble */}
+          {(strategy === 'lightgbm' || strategy === 'ensemble') && (
+            <div className="bg-gray-900 rounded-xl p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-white font-semibold">
+                  Feature Importance
+                  <span className="text-gray-500 font-normal text-sm ml-2">
+                    LightGBM — which indicators mattered most
+                  </span>
+                </h3>
+                {!featureImportance && (
+                  <button
+                    onClick={fetchFeatureImportance}
+                    disabled={fiLoading}
+                    className="px-4 py-1.5 bg-gray-700 hover:bg-gray-600 disabled:opacity-40
+                     rounded-lg text-sm text-white transition-colors"
+                  >
+                    {fiLoading ? 'Loading...' : 'Show'}
+                  </button>
+                )}
+                {featureImportance && (
+                  <button
+                    onClick={() => setFeatureImportance(null)}
+                    className="px-4 py-1.5 bg-gray-700 hover:bg-gray-600
+                     rounded-lg text-sm text-white transition-colors"
+                  >
+                    Hide
+                  </button>
+                )}
+              </div>
+
+              {fiLoading && (
+                <p className="text-gray-400 text-sm">Training model to compute importance...</p>
+              )}
+
+              {featureImportance && (() => {
+                const entries = Object.entries(featureImportance)
+                const maxVal = entries[0][1]
+
+                return (
+                  <div className="flex flex-col gap-2">
+                    {entries.map(([feature, score]) => {
+                      const pct = (score / maxVal) * 100
+                      // Color top 3 purple, rest gray
+                      const rank = entries.findIndex(([f]) => f === feature)
+                      const barColor = rank < 3 ? 'bg-purple-500' : 'bg-gray-600'
+
+                      return (
+                        <div key={feature} className="flex items-center gap-3">
+                          <span className="text-gray-400 text-xs w-32 text-right shrink-0">
+                            {feature}
+                          </span>
+                          <div className="flex-1 bg-gray-800 rounded-full h-4 relative">
+                            <div
+                              className={`${barColor} h-4 rounded-full transition-all duration-500`}
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                          <span className="text-gray-400 text-xs w-10 text-right shrink-0">
+                            {score}
+                          </span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })()}
             </div>
           )}
         </>
