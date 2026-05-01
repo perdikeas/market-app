@@ -156,6 +156,25 @@ export default function Backtest() {
   const [featureImportance, setFeatureImportance] = useState(null)
   const [fiLoading, setFiLoading] = useState(false)
 
+  //"Compare mode" state
+  const [compareMode, setCompareMode] = useState(false)
+  const [selectedStrategies, setSelectedStrategies] = useState([])
+  const [comparisonResults, setComparisonResults] = useState([])
+  const [compareLoading, setCompareLoading] = useState(false)
+  const [compareError, setCompareError] = useState(null)
+
+  //Strategy colors for the "Compare" mode
+  const STRATEGY_COLORS = [
+    '#a855f7', // purple
+    '#3b82f6', // blue
+    '#22c55e', // green
+    '#f59e0b', // amber
+    '#ef4444', // red
+    '#06b6d4', // cyan
+    '#ec4899', // pink
+    '#84cc16', // lime
+  ]
+
   // Load strategy list on mount
   useEffect(() => {
     fetch(`${BACKTEST_URL}/strategies`)
@@ -223,6 +242,61 @@ export default function Backtest() {
   const selectedStrategy = strategies.find(s => s.key === strategy)
   const hasParams = selectedStrategy && Object.keys(selectedStrategy.params).length > 0
 
+  //Compare mode function -> runs the comparison between the strategies
+  async function runComparison() {
+    if (selectedStrategies.length < 2) {
+      setCompareError('Select at least 2 strategies to compare')
+      return
+    }
+    setCompareLoading(true)
+    setCompareError(null)
+    setComparisonResults([])
+
+    try {
+      const results = await Promise.all(
+        selectedStrategies.map(async (stratKey) => {
+          const meta = strategies.find(s => s.key === stratKey)
+          const defaults = {}
+          Object.entries(meta.params).forEach(([k, v]) => {
+            defaults[k] = v.default
+          })
+          const res = await fetch(`${BACKTEST_URL}/backtest`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              symbol,
+              strategy: stratKey,
+              period,
+              initial_capital: capital,
+              params: defaults,
+              atr_multiplier: atrMultiplier,
+              min_holding_days: minHoldingDays,
+              max_drawdown_pct: maxDrawdownPct,
+            }),
+          })
+          if (!res.ok) {
+            const err = await res.json()
+            throw new Error(`${meta.name}: ${err.detail}`)
+          }
+          const data = await res.json()
+          return { ...data, color: STRATEGY_COLORS[selectedStrategies.indexOf(stratKey)] }
+        })
+      )
+      setComparisonResults(results)
+    } catch (e) {
+      setCompareError(e.message)
+    } finally {
+      setCompareLoading(false)
+    }
+  }
+
+  function toggleStrategy(key) {
+    setSelectedStrategies(prev =>
+      prev.includes(key) ? prev.filter(k => k !== key) : [...prev, key]
+    )
+  }
+
+  //Fetch feature importance
   async function fetchFeatureImportance() {
     setFiLoading(true)
     try {
@@ -288,6 +362,210 @@ export default function Backtest() {
 
       {/* ── Control panel ──────────────────────────────────────────────── */}
       <div className="bg-gray-900 rounded-xl p-5 flex flex-col gap-5">
+
+        {/* ── Compare Mode Toggle ─────────────────────────────────── */}
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => {
+              setCompareMode(v => !v)
+              setComparisonResults([])
+              setSelectedStrategies([])
+              setCompareError(null)
+            }}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${compareMode
+              ? 'bg-purple-600 text-white'
+              : 'bg-gray-800 text-gray-400 hover:text-white'
+              }`}
+          >
+            ⚖️ Compare Strategies
+          </button>
+          {compareMode && (
+            <span className="text-gray-500 text-xs">
+              Select strategies below then run comparison
+            </span>
+          )}
+        </div>
+
+        {/* ── Strategy checklist (compare mode only) ──────────────── */}
+        {compareMode && (
+          <div className="bg-gray-900 rounded-xl p-5 flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <p className="text-gray-400 text-xs uppercase tracking-widest">
+                Select Strategies to Compare
+              </p>
+              <button
+                onClick={runComparison}
+                disabled={compareLoading || selectedStrategies.length < 2}
+                className="px-5 py-2 bg-purple-600 hover:bg-purple-500 disabled:opacity-40
+                   rounded-lg text-sm font-semibold transition-colors"
+              >
+                {compareLoading ? 'Running...' : `Run Comparison (${selectedStrategies.length})`}
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+              {strategies
+                .filter(s => !['lstm', 'ensemble'].includes(s.key)) // exclude slow ML strategies
+                .map((s, idx) => {
+                  const isSelected = selectedStrategies.includes(s.key)
+                  const color = STRATEGY_COLORS[selectedStrategies.indexOf(s.key)]
+                  return (
+                    <button
+                      key={s.key}
+                      onClick={() => toggleStrategy(s.key)}
+                      className={`px-3 py-2 rounded-lg text-sm text-left transition-colors border ${isSelected
+                        ? 'border-purple-500 bg-gray-800 text-white'
+                        : 'border-gray-700 bg-gray-800 text-gray-400 hover:text-white'
+                        }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        {isSelected && (
+                          <div
+                            className="w-2.5 h-2.5 rounded-full shrink-0"
+                            style={{ backgroundColor: color }}
+                          />
+                        )}
+                        {!isSelected && (
+                          <div className="w-2.5 h-2.5 rounded-full shrink-0 bg-gray-600" />
+                        )}
+                        <span className="truncate">{s.name}</span>
+                      </div>
+                    </button>
+                  )
+                })}
+            </div>
+
+            {/* ── Comparison Results ──────────────────────────────────── */}
+            {comparisonResults.length > 0 && (
+              <div className="flex flex-col gap-6">
+
+                {/* Metrics comparison table */}
+                <div className="bg-gray-900 rounded-xl p-5 overflow-x-auto">
+                  <h3 className="text-white font-semibold mb-4">
+                    Strategy Comparison
+                    <span className="text-gray-500 font-normal text-sm ml-2">
+                      {symbol} · {period}
+                    </span>
+                  </h3>
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-gray-800">
+                        <th className="pb-3 text-left text-gray-400 font-medium w-40">Metric</th>
+                        {comparisonResults.map(r => (
+                          <th key={r.strategy} className="pb-3 text-right font-medium" style={{ color: r.color }}>
+                            {r.strategy}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[
+                        { label: 'Total Return', key: 'total_return_pct', fmt: v => `${v > 0 ? '+' : ''}${v}%`, good: v => v > 0 },
+                        { label: 'Buy & Hold', key: 'benchmark_return_pct', fmt: v => `${v > 0 ? '+' : ''}${v}%`, good: () => null },
+                        { label: 'Sharpe Ratio', key: 'sharpe_ratio', fmt: v => v, good: v => v > 1 ? true : v < 0 ? false : null },
+                        { label: 'Max Drawdown', key: 'max_drawdown_pct', fmt: v => `${v}%`, good: v => false },
+                        { label: 'Win Rate', key: 'win_rate_pct', fmt: v => `${v}%`, good: v => v > 50 },
+                        { label: 'Ann. Return', key: 'annualized_return_pct', fmt: v => `${v}%`, good: v => v > 0 },
+                        { label: 'Volatility', key: 'volatility_pct', fmt: v => `${v}%`, good: () => null },
+                        { label: 'Total Trades', key: 'total_trades', fmt: v => v, good: () => null },
+                        { label: 'Avg Trade P&L', key: 'avg_trade_pnl', fmt: v => `$${v}`, good: v => v > 0 },
+                      ].map(({ label, key, fmt, good }) => {
+                        // Find best value for highlighting
+                        const values = comparisonResults.map(r => r.metrics[key])
+                        const bestVal = key === 'max_drawdown_pct'
+                          ? Math.max(...values)   // least negative drawdown is best
+                          : Math.max(...values)
+
+                        return (
+                          <tr key={key} className="border-b border-gray-800 hover:bg-gray-800">
+                            <td className="py-2.5 text-gray-400">{label}</td>
+                            {comparisonResults.map(r => {
+                              const val = r.metrics[key]
+                              const isGood = good(val)
+                              const isBest = val === bestVal
+                              const color = isGood === null
+                                ? 'text-white'
+                                : isGood ? 'text-green-400' : 'text-red-400'
+
+                              return (
+                                <td key={r.strategy} className={`py-2.5 text-right font-medium ${color}`}>
+                                  {fmt(val)}
+                                  {isBest && comparisonResults.length > 1 && (
+                                    <span className="ml-1 text-xs">★</span>
+                                  )}
+                                </td>
+                              )
+                            })}
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Overlaid equity curves */}
+                <div className="bg-gray-900 rounded-xl p-5">
+                  <h3 className="text-white font-semibold mb-4">Equity Curves</h3>
+                  <ResponsiveContainer width="100%" height={400}>
+                    <LineChart>
+                      <XAxis
+                        dataKey="date"
+                        tick={{ fill: '#9ca3af', fontSize: 11 }}
+                        tickFormatter={d => d.slice(0, 7)}
+                        interval="preserveStartEnd"
+                        allowDuplicatedCategory={false}
+                      />
+                      <YAxis
+                        tick={{ fill: '#9ca3af', fontSize: 11 }}
+                        tickFormatter={v => `$${(v / 1000).toFixed(1)}k`}
+                      />
+                      <Tooltip
+                        contentStyle={{ backgroundColor: '#1f2937', border: '1px solid #374151', borderRadius: 8 }}
+                        formatter={(v, name) => [`$${Number(v).toLocaleString()}`, name]}
+                        labelStyle={{ color: '#9ca3af', marginBottom: 4 }}
+                      />
+                      <Legend wrapperStyle={{ paddingTop: 12 }} />
+                      <ReferenceLine y={capital} stroke="#374151" strokeDasharray="4 4" />
+
+                      {/* Buy & hold line from first result */}
+                      <Line
+                        data={comparisonResults[0].equity_curve}
+                        type="monotone"
+                        dataKey="benchmark"
+                        name="Buy & Hold"
+                        stroke="#374151"
+                        dot={false}
+                        strokeWidth={1.5}
+                        strokeDasharray="5 5"
+                      />
+
+                      {/* One line per strategy */}
+                      {comparisonResults.map(r => (
+                        <Line
+                          key={r.strategy}
+                          data={r.equity_curve}
+                          type="monotone"
+                          dataKey="value"
+                          name={r.strategy}
+                          stroke={r.color}
+                          dot={false}
+                          strokeWidth={2}
+                        />
+                      ))}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+
+              </div>
+            )}
+
+            {compareError && (
+              <div className="bg-red-950 border border-red-800 text-red-300 px-4 py-3 rounded-xl text-sm">
+                {compareError}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Row 1: ticker / strategy / period / capital / run */}
         <div className="flex flex-wrap gap-4 items-end">
