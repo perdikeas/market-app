@@ -15,6 +15,7 @@ import numpy as np
 from statsmodels.tsa.stattools import coint
 from statsmodels.regression.linear_model import OLS
 import statsmodels.api as sm
+from data import fetch_ohlcv
 
 
 # ─────────────────────────────────────────────
@@ -325,92 +326,114 @@ def build_lstm_model(input_size: int = 21, hidden_size: int = 64,
 
 
 #Training for LSTM
-def walk_forward_lstm(X: np.ndarray, y: np.ndarray, dates: list,
-                      min_train_samples: int = 200,
-                      retrain_every: int = 63,
-                      epochs: int = 20,
-                      batch_size: int = 32,
-                      learning_rate: float = 0.001,
-                      seed = 42) -> pd.Series:
-    """
-    Walk-forward training and prediction for LSTM.
-    Same honest validation logic as LightGBM:
-      - Only predict on data the model has never seen
-      - Retrain every retrain_every days on all available history
-    """
+def walk_forward_lstm(X, y, dates,
+                      X_pred_override=None,   # ← add this parameter
+                      min_train_samples=200,
+                      retrain_every=63,
+                      epochs=30,
+                      batch_size=32,
+                      learning_rate=0.001,
+                      seed=42):
+
     import torch
     import torch.nn as nn
     import random
     from torch.utils.data import TensorDataset, DataLoader
     from sklearn.preprocessing import StandardScaler
 
-    device = torch.device('cpu')
-
-    # Build a full date-indexed signal series starting at 0
-    all_dates  = pd.DatetimeIndex(dates)
-    signals    = pd.Series(0, index=all_dates)
-    
-    #Fix all random seeds for reproducibility
     torch.manual_seed(seed)
     np.random.seed(seed)
     random.seed(seed)
     generator = torch.Generator()
     generator.manual_seed(seed)
 
+    all_dates = pd.DatetimeIndex(dates)
+    signals   = pd.Series(0, index=all_dates)
     n = len(X)
+
+    # ── If X_pred_override provided, train on all X, predict on override ──
+    if X_pred_override is not None:
+        print(f"  Training on {n} samples, predicting on {len(X_pred_override)} sequences...")
+
+        y_enc = (y + 1).astype(int)
+        counts  = np.bincount(y_enc, minlength=3).astype(float)
+        counts  = np.where(counts == 0, 1, counts)
+        weights = torch.tensor(1.0 / counts, dtype=torch.float32)
+
+        X_tensor = torch.tensor(X, dtype=torch.float32)
+        y_tensor = torch.tensor(y_enc, dtype=torch.long)
+        dataset  = TensorDataset(X_tensor, y_tensor)
+        loader   = DataLoader(dataset, batch_size=batch_size,
+                              shuffle=True, generator=generator)
+
+        model     = build_lstm_model()
+        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+        criterion = torch.nn.CrossEntropyLoss(weight=weights)
+
+        model.train()
+        for epoch in range(epochs):
+            epoch_loss = 0
+            for X_batch, y_batch in loader:
+                optimizer.zero_grad()
+                output = model(X_batch)
+                loss   = criterion(output, y_batch)
+                loss.backward()
+                optimizer.step()
+                epoch_loss += loss.item()
+            if (epoch + 1) % 10 == 0:
+                print(f"    Epoch {epoch+1}/{epochs} — loss: {epoch_loss/len(loader):.4f}")
+
+        model.eval()
+        with torch.no_grad():
+            X_pred_tensor = torch.tensor(X_pred_override, dtype=torch.float32)
+            logits        = model(X_pred_tensor)
+            pred_enc      = logits.argmax(dim=1).numpy()
+            pred_labels   = pred_enc - 1
+
+        for date, label in zip(all_dates, pred_labels):
+            signals[date] = int(label)
+
+        return signals
+
+    # ── Otherwise fall back to original walk-forward logic ────────
     if n < min_train_samples + retrain_every:
         print(f"Not enough data: need {min_train_samples + retrain_every}, got {n}")
         return signals
 
-    print(f"Walk-forward LSTM: {n} samples, "
-          f"training from sample {min_train_samples}, "
-          f"retraining every {retrain_every} days")
+    print(f"Walk-forward LSTM: {n} samples, training from {min_train_samples}, retraining every {retrain_every}")
 
     for i in range(min_train_samples, n, retrain_every):
-        print(f"  Window {i}/{n} — training on {i} samples...")
+        print(f"  Window {i}/{n}...")
 
-        # ── 1. Split train / predict ──────────────────────────────
-        X_train_raw = X[:i]             # shape: (i, 20, 21)
-        y_train_raw = y[:i]             # shape: (i,)
+        X_train_raw = X[:i]
+        y_train_raw = y[:i]
         predict_end = min(i + retrain_every, n)
-        X_pred_raw  = X[i:predict_end]  # shape: (up to retrain_every, 20, 21)
+        X_pred_raw  = X[i:predict_end]
 
-        # ── 2. Normalize features ─────────────────────────────────
-        # Fit scaler ONLY on training data — never on prediction data
-        # Reshape to 2D for scaler: (samples * seq_len, features)
-        n_train, seq_len, n_feat = X_train_raw.shape
+        n_train, sl, nf = X_train_raw.shape
         scaler = StandardScaler()
-        X_train_2d = X_train_raw.reshape(-1, n_feat)
-        X_train_2d = scaler.fit_transform(X_train_2d)
-        X_train     = X_train_2d.reshape(n_train, seq_len, n_feat)
+        X_tr_2d = scaler.fit_transform(X_train_raw.reshape(-1, nf))
+        X_tr    = X_tr_2d.reshape(n_train, sl, nf)
 
-        # Apply same scaler to prediction data
-        n_pred     = X_pred_raw.shape[0]
-        X_pred_2d  = X_pred_raw.reshape(-1, n_feat)
-        X_pred_2d  = scaler.transform(X_pred_2d)   # transform, not fit_transform
-        X_pred     = X_pred_2d.reshape(n_pred, seq_len, n_feat)
+        n_pred    = X_pred_raw.shape[0]
+        X_pr_2d   = scaler.transform(X_pred_raw.reshape(-1, nf))
+        X_pr      = X_pr_2d.reshape(n_pred, sl, nf)
 
-        # ── 3. Encode labels: -1→0, 0→1, 1→2 ────────────────────
-        y_train_enc = (y_train_raw + 1).astype(int)  # -1→0, 0→1, 1→2
+        y_enc   = (y_train_raw + 1).astype(int)
+        counts  = np.bincount(y_enc, minlength=3).astype(float)
+        counts  = np.where(counts == 0, 1, counts)
+        weights = torch.tensor(1.0 / counts, dtype=torch.float32)
 
-        # ── 4. Build PyTorch dataset and dataloader ───────────────
-        X_tensor = torch.tensor(X_train, dtype=torch.float32)
-        y_tensor = torch.tensor(y_train_enc, dtype=torch.long)
+        X_tensor = torch.tensor(X_tr, dtype=torch.float32)
+        y_tensor = torch.tensor(y_enc, dtype=torch.long)
         dataset  = TensorDataset(X_tensor, y_tensor)
-        loader = DataLoader(dataset, batch_size=batch_size,
-                    shuffle=True, generator=generator)
+        loader   = DataLoader(dataset, batch_size=batch_size,
+                              shuffle=True, generator=generator)
 
-        # ── 5. Build fresh model and optimizer ───────────────────
         model     = build_lstm_model()
         optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+        criterion = torch.nn.CrossEntropyLoss(weight=weights)
 
-        # Compute class weights to handle imbalance
-        counts    = np.bincount(y_train_enc, minlength=3).astype(float)
-        counts    = np.where(counts == 0, 1, counts)   # avoid division by zero
-        weights   = torch.tensor(1.0 / counts, dtype=torch.float32)
-        criterion = nn.CrossEntropyLoss(weight=weights)
-
-        # ── 6. Train for N epochs ─────────────────────────────────
         model.train()
         for epoch in range(epochs):
             for X_batch, y_batch in loader:
@@ -420,65 +443,94 @@ def walk_forward_lstm(X: np.ndarray, y: np.ndarray, dates: list,
                 loss.backward()
                 optimizer.step()
 
-        # ── 7. Predict on unseen data ─────────────────────────────
         model.eval()
         with torch.no_grad():
-            X_pred_tensor = torch.tensor(X_pred, dtype=torch.float32)
-            logits        = model(X_pred_tensor)        # (n_pred, 3)
-            pred_enc      = logits.argmax(dim=1).numpy()  # 0, 1, or 2
-            pred_labels   = pred_enc - 1                # back to -1, 0, 1
+            X_pred_tensor = torch.tensor(X_pr, dtype=torch.float32)
+            logits        = model(X_pred_tensor)
+            pred_enc      = logits.argmax(dim=1).numpy()
+            pred_labels   = pred_enc - 1
 
-        # ── 8. Write predictions into signal series ───────────────
         pred_dates = all_dates[i:predict_end]
         for date, label in zip(pred_dates, pred_labels):
             signals[date] = int(label)
 
     return signals
 
-    class LSTMClassifier(nn.Module):
-        def __init__(self):
-            super().__init__()
-
-            self.lstm = nn.LSTM(
-                input_size  = input_size,   # 21 features per timestep
-                hidden_size = hidden_size,  # 64 memory units
-                num_layers  = num_layers,   # 2 stacked LSTM layers
-                dropout     = dropout,      # 30% dropout between layers
-                batch_first = True          # expect (batch, seq, features)
-            )
-
-            self.classifier = nn.Sequential(
-                nn.Dropout(dropout),
-                nn.Linear(hidden_size, 32),
-                nn.ReLU(),
-                nn.Linear(32, 3)            # 3 classes: sell / hold / buy
-            )
-
-        def forward(self, x):
-            # x shape: (batch, seq_len, input_size)
-            lstm_out, _ = self.lstm(x)
-            # lstm_out shape: (batch, seq_len, hidden_size)
-            # We only care about the last timestep — it has seen the full sequence
-            last_hidden = lstm_out[:, -1, :]
-            # last_hidden shape: (batch, hidden_size)
-            return self.classifier(last_hidden)
-            # output shape: (batch, 3) — raw scores for each class
-
-    return LSTMClassifier()
-
 
 #LSTM based signal to add to the STRATEGIES registry
+LSTM_UNIVERSE = ['AAPL', 'MSFT', 'GOOGL', 'JPM', 'NVDA', 'SPY', 'GLD', 'TSLA']
+
 def lstm_signal(df: pd.DataFrame, seq_len: int = 20, forward_days: int = 5,
-                threshold: float = 0.02, epochs: int = 20) -> pd.Series:
+                threshold: float = 0.02, epochs: int = 30) -> pd.Series:
     """
-    LSTM-based signal using walk-forward validation.
-    Processes sequences of seq_len days to capture temporal dependencies.
-    Requires 5y period. Training takes 3-5 minutes.
+    LSTM strategy trained on multiple tickers for richer training data.
+    Predictions are made only on the target ticker (df passed in).
+    Training set: 8 liquid tickers × 5y = ~8,000 samples.
     """
-    features = build_features(df)
-    targets  = build_targets(df, forward_days=forward_days, threshold=threshold)
-    X, y, dates = build_sequences(features, targets, seq_len=seq_len)
-    signals  = walk_forward_lstm(X, y, dates)
+    import warnings
+    warnings.filterwarnings('ignore')
+
+    # ── 1. Build training data from universe of tickers ──────────
+    print("Fetching multi-ticker training data...")
+    all_X, all_y = [], []
+
+    for ticker in LSTM_UNIVERSE:
+        try:
+            df_ticker = fetch_ohlcv(ticker, "5y")
+            
+            # Skip if this ticker matches the target df — prevents data leakage
+            if df_ticker.index.equals(df.index) and np.allclose(
+                df_ticker['close'].values, df['close'].values, rtol=0.01):
+                print(f"  {ticker}: skipped (matches target ticker)")
+                continue
+
+            feat         = build_features(df_ticker)
+            targ         = build_targets(df_ticker,
+                                        forward_days=forward_days,
+                                        threshold=threshold)
+            X_t, y_t, _ = build_sequences(feat, targ, seq_len=seq_len)
+            all_X.append(X_t)
+            all_y.append(y_t)
+            print(f"  {ticker}: {len(X_t)} samples")
+        except Exception as e:
+            print(f"  {ticker}: skipped ({e})")
+
+    if not all_X:
+        print("No training data collected.")
+        return pd.Series(0, index=df.index)
+
+    X_train = np.concatenate(all_X, axis=0)  # (~8000, seq_len, 21)
+    y_train = np.concatenate(all_y, axis=0)  # (~8000,)
+    print(f"Total training samples: {len(X_train)}")
+
+    # ── 2. Build prediction sequences from target ticker ─────────
+    feat_target = build_features(df)
+    targ_target = build_targets(df, forward_days=forward_days,
+                                threshold=threshold)
+    X_pred, _, dates_pred = build_sequences(feat_target, targ_target,
+                                            seq_len=seq_len)
+
+    # ── 3. Normalize — fit scaler on training data only ──────────
+    from sklearn.preprocessing import StandardScaler
+    n_train, sl, nf = X_train.shape
+    scaler = StandardScaler()
+    X_train_2d = scaler.fit_transform(X_train.reshape(-1, nf))
+    X_train     = X_train_2d.reshape(n_train, sl, nf)
+
+    n_pred     = X_pred.shape[0]
+    X_pred_2d  = scaler.transform(X_pred.reshape(-1, nf))
+    X_pred      = X_pred_2d.reshape(n_pred, sl, nf)
+
+    # ── 4. Train one model on all tickers ─────────────────────────
+    signals = walk_forward_lstm(
+        X_train, y_train,
+        dates=dates_pred,        # dates for prediction alignment
+        X_pred_override=X_pred,  # predict on target ticker sequences
+        epochs=epochs,
+        min_train_samples=len(X_train),  # train on everything, predict once
+        retrain_every=len(X_train),      # no retraining needed
+    )
+
     return signals.reindex(df.index).fillna(0)
 
 # ─────────────────────────────────────────────
