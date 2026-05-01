@@ -236,6 +236,251 @@ def lightgbm_signal(df: pd.DataFrame, forward_days: int = 5,
                                     retrain_every=retrain_every)
     return signals
 
+#Builds 3d tensor for LSTM
+def build_sequences(features: pd.DataFrame, targets: pd.Series,
+                    seq_len: int = 20) -> tuple:
+    """
+    Converts the flat 2D feature table into 3D sequences for LSTM.
+
+    Input:
+      features: (N, 21) — one row per day
+      targets:  (N,)    — one label per day
+
+    Output:
+      X: (N - seq_len, seq_len, 21) — sequences of seq_len days
+      y: (N - seq_len,)             — label for the last day of each sequence
+      dates: index of the last day of each sequence (for aligning predictions)
+
+    Example with seq_len=3 and 5 days of data:
+      Sequence 0: [day0, day1, day2] → label for day2
+      Sequence 1: [day1, day2, day3] → label for day3
+      Sequence 2: [day2, day3, day4] → label for day4
+    """
+    # First align and drop any rows where either features or targets are NaN
+    valid = targets.notna() & features.notna().all(axis=1)
+    feat  = features[valid].values   # numpy array shape (N, 21)
+    targ  = targets[valid].values    # numpy array shape (N,)
+    idx   = features[valid].index    # dates
+
+    X, y, dates = [], [], []
+
+    for i in range(seq_len, len(feat)):
+        X.append(feat[i - seq_len:i])   # 20 days of features
+        y.append(targ[i])               # label for day i
+        dates.append(idx[i])            # date of day i
+
+    X = np.array(X, dtype=np.float32)  # shape: (samples, seq_len, n_features)
+    y = np.array(y, dtype=np.float32)  # shape: (samples,)
+
+    return X, y, dates
+
+#2-layer LSTM deep-learning model
+def build_lstm_model(input_size: int = 21, hidden_size: int = 64,
+                     num_layers: int = 2, dropout: float = 0.3):
+    """
+    Builds a 2-layer LSTM classifier.
+
+    Architecture:
+      Input (seq_len, input_size)
+        → LSTM layer 1 (hidden_size=64)
+        → LSTM layer 2 (hidden_size=64)
+        → Dropout (0.3)
+        → Take only the last timestep's hidden state
+        → Fully connected layer (64 → 3)
+        → Output: probabilities for [sell, hold, buy]
+    """
+    import torch
+    import torch.nn as nn
+
+    class LSTMClassifier(nn.Module):
+        def __init__(self):
+            super().__init__()
+
+            self.lstm = nn.LSTM(
+                input_size  = input_size,   # 21 features per timestep
+                hidden_size = hidden_size,  # 64 memory units
+                num_layers  = num_layers,   # 2 stacked LSTM layers
+                dropout     = dropout,      # 30% dropout between layers
+                batch_first = True          # expect (batch, seq, features)
+            )
+
+            self.classifier = nn.Sequential(
+                nn.Dropout(dropout),
+                nn.Linear(hidden_size, 32),
+                nn.ReLU(),
+                nn.Linear(32, 3)            # 3 classes: sell / hold / buy
+            )
+
+        def forward(self, x):
+            # x shape: (batch, seq_len, input_size)
+            lstm_out, _ = self.lstm(x)
+            # lstm_out shape: (batch, seq_len, hidden_size)
+            # We only care about the last timestep — it has seen the full sequence
+            last_hidden = lstm_out[:, -1, :]
+            # last_hidden shape: (batch, hidden_size)
+            return self.classifier(last_hidden)
+            # output shape: (batch, 3) — raw scores for each class
+
+    return LSTMClassifier()
+
+
+#Training for LSTM
+def walk_forward_lstm(X: np.ndarray, y: np.ndarray, dates: list,
+                      min_train_samples: int = 200,
+                      retrain_every: int = 63,
+                      epochs: int = 20,
+                      batch_size: int = 32,
+                      learning_rate: float = 0.001,
+                      seed = 42) -> pd.Series:
+    """
+    Walk-forward training and prediction for LSTM.
+    Same honest validation logic as LightGBM:
+      - Only predict on data the model has never seen
+      - Retrain every retrain_every days on all available history
+    """
+    import torch
+    import torch.nn as nn
+    import random
+    from torch.utils.data import TensorDataset, DataLoader
+    from sklearn.preprocessing import StandardScaler
+
+    device = torch.device('cpu')
+
+    # Build a full date-indexed signal series starting at 0
+    all_dates  = pd.DatetimeIndex(dates)
+    signals    = pd.Series(0, index=all_dates)
+    
+    #Fix all random seeds for reproducibility
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    generator = torch.Generator()
+    generator.manual_seed(seed)
+
+    n = len(X)
+    if n < min_train_samples + retrain_every:
+        print(f"Not enough data: need {min_train_samples + retrain_every}, got {n}")
+        return signals
+
+    print(f"Walk-forward LSTM: {n} samples, "
+          f"training from sample {min_train_samples}, "
+          f"retraining every {retrain_every} days")
+
+    for i in range(min_train_samples, n, retrain_every):
+        print(f"  Window {i}/{n} — training on {i} samples...")
+
+        # ── 1. Split train / predict ──────────────────────────────
+        X_train_raw = X[:i]             # shape: (i, 20, 21)
+        y_train_raw = y[:i]             # shape: (i,)
+        predict_end = min(i + retrain_every, n)
+        X_pred_raw  = X[i:predict_end]  # shape: (up to retrain_every, 20, 21)
+
+        # ── 2. Normalize features ─────────────────────────────────
+        # Fit scaler ONLY on training data — never on prediction data
+        # Reshape to 2D for scaler: (samples * seq_len, features)
+        n_train, seq_len, n_feat = X_train_raw.shape
+        scaler = StandardScaler()
+        X_train_2d = X_train_raw.reshape(-1, n_feat)
+        X_train_2d = scaler.fit_transform(X_train_2d)
+        X_train     = X_train_2d.reshape(n_train, seq_len, n_feat)
+
+        # Apply same scaler to prediction data
+        n_pred     = X_pred_raw.shape[0]
+        X_pred_2d  = X_pred_raw.reshape(-1, n_feat)
+        X_pred_2d  = scaler.transform(X_pred_2d)   # transform, not fit_transform
+        X_pred     = X_pred_2d.reshape(n_pred, seq_len, n_feat)
+
+        # ── 3. Encode labels: -1→0, 0→1, 1→2 ────────────────────
+        y_train_enc = (y_train_raw + 1).astype(int)  # -1→0, 0→1, 1→2
+
+        # ── 4. Build PyTorch dataset and dataloader ───────────────
+        X_tensor = torch.tensor(X_train, dtype=torch.float32)
+        y_tensor = torch.tensor(y_train_enc, dtype=torch.long)
+        dataset  = TensorDataset(X_tensor, y_tensor)
+        loader = DataLoader(dataset, batch_size=batch_size,
+                    shuffle=True, generator=generator)
+
+        # ── 5. Build fresh model and optimizer ───────────────────
+        model     = build_lstm_model()
+        optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
+        # Compute class weights to handle imbalance
+        counts    = np.bincount(y_train_enc, minlength=3).astype(float)
+        counts    = np.where(counts == 0, 1, counts)   # avoid division by zero
+        weights   = torch.tensor(1.0 / counts, dtype=torch.float32)
+        criterion = nn.CrossEntropyLoss(weight=weights)
+
+        # ── 6. Train for N epochs ─────────────────────────────────
+        model.train()
+        for epoch in range(epochs):
+            for X_batch, y_batch in loader:
+                optimizer.zero_grad()
+                output = model(X_batch)
+                loss   = criterion(output, y_batch)
+                loss.backward()
+                optimizer.step()
+
+        # ── 7. Predict on unseen data ─────────────────────────────
+        model.eval()
+        with torch.no_grad():
+            X_pred_tensor = torch.tensor(X_pred, dtype=torch.float32)
+            logits        = model(X_pred_tensor)        # (n_pred, 3)
+            pred_enc      = logits.argmax(dim=1).numpy()  # 0, 1, or 2
+            pred_labels   = pred_enc - 1                # back to -1, 0, 1
+
+        # ── 8. Write predictions into signal series ───────────────
+        pred_dates = all_dates[i:predict_end]
+        for date, label in zip(pred_dates, pred_labels):
+            signals[date] = int(label)
+
+    return signals
+
+    class LSTMClassifier(nn.Module):
+        def __init__(self):
+            super().__init__()
+
+            self.lstm = nn.LSTM(
+                input_size  = input_size,   # 21 features per timestep
+                hidden_size = hidden_size,  # 64 memory units
+                num_layers  = num_layers,   # 2 stacked LSTM layers
+                dropout     = dropout,      # 30% dropout between layers
+                batch_first = True          # expect (batch, seq, features)
+            )
+
+            self.classifier = nn.Sequential(
+                nn.Dropout(dropout),
+                nn.Linear(hidden_size, 32),
+                nn.ReLU(),
+                nn.Linear(32, 3)            # 3 classes: sell / hold / buy
+            )
+
+        def forward(self, x):
+            # x shape: (batch, seq_len, input_size)
+            lstm_out, _ = self.lstm(x)
+            # lstm_out shape: (batch, seq_len, hidden_size)
+            # We only care about the last timestep — it has seen the full sequence
+            last_hidden = lstm_out[:, -1, :]
+            # last_hidden shape: (batch, hidden_size)
+            return self.classifier(last_hidden)
+            # output shape: (batch, 3) — raw scores for each class
+
+    return LSTMClassifier()
+
+
+#LSTM based signal to add to the STRATEGIES registry
+def lstm_signal(df: pd.DataFrame, seq_len: int = 20, forward_days: int = 5,
+                threshold: float = 0.02, epochs: int = 20) -> pd.Series:
+    """
+    LSTM-based signal using walk-forward validation.
+    Processes sequences of seq_len days to capture temporal dependencies.
+    Requires 5y period. Training takes 3-5 minutes.
+    """
+    features = build_features(df)
+    targets  = build_targets(df, forward_days=forward_days, threshold=threshold)
+    X, y, dates = build_sequences(features, targets, seq_len=seq_len)
+    signals  = walk_forward_lstm(X, y, dates)
+    return signals.reindex(df.index).fillna(0)
+
 # ─────────────────────────────────────────────
 # 1. SMA Crossover
 # ─────────────────────────────────────────────
@@ -749,6 +994,17 @@ STRATEGIES = {
             "forward_days":   {"type": "int",   "default": 5,    "min": 3,    "max": 20,   "label": "Forecast Horizon (days)"},
             "threshold":      {"type": "float", "default": 0.02, "min": 0.01, "max": 0.05, "label": "Signal Threshold"},
             "retrain_every":  {"type": "int",   "default": 63,   "min": 21,   "max": 126,  "label": "Retrain Frequency (days)"},
+        }
+    },
+    "lstm": {
+        "fn": lstm_signal,
+        "name": "LSTM Neural Network",
+        "description": "2-layer LSTM trained on 20-day sequences of 21 technical indicators. Captures temporal dependencies LightGBM cannot. Requires 5y period. Training takes 3-5 minutes.",
+        "params": {
+            "seq_len":      {"type": "int",   "default": 20,   "min": 10,  "max": 40,   "label": "Sequence Length (days)"},
+            "forward_days": {"type": "int",   "default": 5,    "min": 3,   "max": 20,   "label": "Forecast Horizon (days)"},
+            "threshold":    {"type": "float", "default": 0.02, "min": 0.01,"max": 0.05, "label": "Signal Threshold"},
+            "epochs":       {"type": "int",   "default": 20,   "min": 10,  "max": 50,   "label": "Training Epochs"},
         }
     },
 }
