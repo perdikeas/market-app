@@ -458,7 +458,25 @@ def walk_forward_lstm(X, y, dates,
 
 
 #LSTM based signal to add to the STRATEGIES registry
-LSTM_UNIVERSE = ['AAPL', 'MSFT', 'GOOGL', 'JPM', 'NVDA', 'SPY', 'GLD', 'TSLA']
+#broad and diverse stock universe to generalize well across all asset classes and stock classes
+LSTM_UNIVERSE = [
+    # Mega-cap tech
+    'AAPL', 'MSFT', 'NVDA',
+    # Finance
+    'JPM', 'GS', 'V',
+    # Healthcare
+    'JNJ', 'UNH',
+    # Consumer & Retail
+    'WMT', 'MCD',
+    # Energy
+    'XOM',
+    # Broad market ETFs
+    'SPY', 'QQQ',
+    # Commodities
+    'GLD',
+    # High volatility
+    'TSLA',
+]
 
 def lstm_signal(df: pd.DataFrame, seq_len: int = 20, forward_days: int = 5,
                 threshold: float = 0.02, epochs: int = 30) -> pd.Series:
@@ -479,13 +497,18 @@ def lstm_signal(df: pd.DataFrame, seq_len: int = 20, forward_days: int = 5,
             df_ticker = fetch_ohlcv(ticker, "5y")
             
             # Skip if this ticker matches the target df — prevents data leakage
-            if df_ticker.index.equals(df.index) and np.allclose(
-                df_ticker['close'].values, df['close'].values, rtol=0.01):
-                print(f"  {ticker}: skipped (matches target ticker)")
-                continue
+            if len(df_ticker) == len(df):
+                overlap = min(len(df_ticker), len(df))
+                correlation = np.corrcoef(
+                    df_ticker['close'].values[-overlap:],
+                    df['close'].values[-overlap:]
+                )[0, 1]
+                if correlation > 0.999:
+                    print(f"  {ticker}: skipped (matches target ticker, correlation={correlation:.4f})")
+                    continue
 
-            feat         = build_features(df_ticker)
-            targ         = build_targets(df_ticker,
+            feat = build_features(df_ticker)
+            targ = build_targets(df_ticker,
                                         forward_days=forward_days,
                                         threshold=threshold)
             X_t, y_t, _ = build_sequences(feat, targ, seq_len=seq_len)
