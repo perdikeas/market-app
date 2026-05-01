@@ -110,30 +110,47 @@ function Portfolio({ token }) {
         const current = prices[pos.symbol]?.price || 0
         return sum + (current * pos.shares)
       }, 0)
-      if (value > 0) saveSnapshot(token, value)
+
+      // Only save one snapshot per day
+      const today = new Date().toDateString()
+      const lastSnapshot = localStorage.getItem('lastSnapshotDate')
+      if (value > 0 && lastSnapshot !== today) {
+        saveSnapshot(token, value)
+        localStorage.setItem('lastSnapshotDate', today)
+      }
     }
   }, [prices])
 
   async function loadAll() {
     setLoading(true)
-    const [data, summary, txs, snaps] = await Promise.all([
-      fetchPortfolio(token),
-      fetchTransactionSummary(token),
-      fetchTransactions(token),
-      fetchSnapshots(token)
-    ])
-    setPositions(data)
-    setRealizedPnL(summary.total_realized_pnl || 0)
-    setTransactions(txs)
-    setSnapshots(snaps)
+    try {
+      const [data, summary, txs, snaps] = await Promise.all([
+        fetchPortfolio(token),
+        fetchTransactionSummary(token),
+        fetchTransactions(token),
+        fetchSnapshots(token)
+      ])
+      if (!Array.isArray(data)) {
+        console.error('Portfolio fetch failed — token may be expired')
+        setLoading(false)
+        return
+      }
+      setPositions(data)
+      setRealizedPnL(summary.total_realized_pnl || 0)
+      setTransactions(txs)
+      setSnapshots(snaps)
 
-    const priceMap = {}
-    await Promise.all(data.map(async (pos) => {
-      const quote = await fetchPrice(pos.symbol)
-      if (quote && quote.c) priceMap[pos.symbol] = { price: quote.c, change: quote.dp }
-    }))
-    setPrices(priceMap)
-    setLoading(false)
+      const priceMap = {}
+      await Promise.all(data.map(async (pos) => {
+        const quote = await fetchPrice(pos.symbol)
+        if (quote && quote.c) priceMap[pos.symbol] = { price: quote.c, change: quote.dp }
+      }))
+      setPrices(priceMap)
+    } catch (err) {
+      console.error('loadAll failed:', err)
+    } finally {
+      setLoading(false)
+    }
   }
 
   async function handleSelectSymbol(symbol) {
@@ -204,6 +221,26 @@ function Portfolio({ token }) {
     loadAll()
   }
 
+  // Deduplicate snapshots by calendar day — keep first snapshot of each day
+  const chartData = (() => {
+    const seen = new Set()
+    return snapshots
+      .filter(s => {
+        const dateKey = new Date(s.created_at).toLocaleDateString('en-US', {
+          month: 'short', day: 'numeric'
+        })
+        if (seen.has(dateKey)) return false
+        seen.add(dateKey)
+        return true
+      })
+      .map(s => ({
+        date: new Date(s.created_at).toLocaleDateString('en-US', {
+          month: 'short', day: 'numeric'
+        }),
+        value: parseFloat(s.total_value.toFixed(2))
+      }))
+  })()
+
   // Compute totals
   const netWorth = positions.reduce((sum, pos) => {
     const current = prices[pos.symbol]?.price || 0
@@ -226,7 +263,9 @@ function Portfolio({ token }) {
         <div className="fixed inset-0 bg-black bg-opacity-70 flex items-center justify-center z-50">
           <div className="bg-gray-900 rounded-2xl p-6 w-80 text-center">
             <h3 className="text-xl font-bold text-white mb-2">Position Closed</h3>
-            <p className="text-gray-400 mb-1">{sellConfirm.symbol} sold at ${parseFloat(sellConfirm.sellPrice).toFixed(2)}</p>
+            <p className="text-gray-400 mb-1">
+              {sellConfirm.symbol} sold at ${parseFloat(sellConfirm.sellPrice).toFixed(2)}
+            </p>
             <p className={`text-2xl font-bold mb-4 ${sellConfirm.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
               {sellConfirm.pnl >= 0 ? '+' : ''}${parseFloat(sellConfirm.pnl).toFixed(2)}
             </p>
@@ -268,30 +307,44 @@ function Portfolio({ token }) {
         </div>
       </div>
 
-      {/* Portfolio Value Chart */}
-      {snapshots.length > 1 && (
+      {/* Portfolio Value Chart — only show if we have deduplicated data */}
+      {chartData.length > 1 && (
         <div className="bg-gray-900 rounded-xl p-4 mb-8">
           <p className="text-gray-400 text-sm mb-3 font-medium">Portfolio Value Over Time</p>
           <ResponsiveContainer width="100%" height={200}>
-            <AreaChart data={snapshots.map(s => ({
-              date: new Date(s.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
-              value: parseFloat(s.total_value.toFixed(2))
-            }))}>
+            <AreaChart data={chartData}>
               <defs>
                 <linearGradient id="portfolioGradient" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="5%" stopColor="#a855f7" stopOpacity={0.3} />
                   <stop offset="95%" stopColor="#a855f7" stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 10 }} tickLine={false} axisLine={false} />
-              <YAxis tick={{ fill: '#9ca3af', fontSize: 10 }} tickLine={false} axisLine={false} domain={['auto', 'auto']} tickFormatter={(v) => `$${v}`} />
+              <XAxis
+                dataKey="date"
+                tick={{ fill: '#9ca3af', fontSize: 10 }}
+                tickLine={false}
+                axisLine={false}
+              />
+              <YAxis
+                tick={{ fill: '#9ca3af', fontSize: 10 }}
+                tickLine={false}
+                axisLine={false}
+                domain={['auto', 'auto']}
+                tickFormatter={(v) => `$${v}`}
+              />
               <Tooltip
                 contentStyle={{ backgroundColor: '#1f2937', border: 'none', borderRadius: '8px' }}
                 labelStyle={{ color: '#9ca3af' }}
                 itemStyle={{ color: '#ffffff' }}
                 formatter={(v) => [`$${v}`, 'Portfolio Value']}
               />
-              <Area type="monotone" dataKey="value" stroke="#a855f7" strokeWidth={2} fill="url(#portfolioGradient)" />
+              <Area
+                type="monotone"
+                dataKey="value"
+                stroke="#a855f7"
+                strokeWidth={2}
+                fill="url(#portfolioGradient)"
+              />
             </AreaChart>
           </ResponsiveContainer>
         </div>
@@ -328,7 +381,9 @@ function Portfolio({ token }) {
           <p className="text-white font-medium">
             Buy <span className="text-purple-400">{addingSymbol}</span>
             {avgPrice && (
-              <span className="text-gray-400 text-sm ml-2">@ ${parseFloat(avgPrice).toFixed(2)}</span>
+              <span className="text-gray-400 text-sm ml-2">
+                @ ${parseFloat(avgPrice).toFixed(2)}
+              </span>
             )}
           </p>
           <input
@@ -374,7 +429,11 @@ function Portfolio({ token }) {
                 const change = prices[pos.symbol]?.change || 0
                 const currentValue = current * pos.shares
                 const pnl = (current - pos.avg_buy_price) * pos.shares
-                const pnlPct = pos.avg_buy_price > 0 ? ((current - pos.avg_buy_price) / pos.avg_buy_price) * 100 : 0
+                const pnlPct = pos.avg_buy_price > 0
+                  ? ((current - pos.avg_buy_price) / pos.avg_buy_price) * 100
+                  : 0
+                // Intraday move in dollars across the whole position
+                const intradayDollars = (current * change / 100) * pos.shares
 
                 return (
                   <div key={pos.id} className="bg-gray-900 rounded-xl p-4">
@@ -389,33 +448,63 @@ function Portfolio({ token }) {
                           className="bg-gray-800 text-white px-3 py-1 rounded-lg outline-none w-48"
                         />
                         <div className="flex gap-2">
-                          <button onClick={() => handleEditSave(pos.id)} className="bg-purple-600 px-3 py-1 rounded-lg hover:bg-purple-700 text-white text-sm">Save</button>
-                          <button onClick={() => setEditingId(null)} className="bg-gray-700 px-3 py-1 rounded-lg hover:bg-gray-600 text-white text-sm">Cancel</button>
+                          <button
+                            onClick={() => handleEditSave(pos.id)}
+                            className="bg-purple-600 px-3 py-1 rounded-lg hover:bg-purple-700 text-white text-sm"
+                          >
+                            Save
+                          </button>
+                          <button
+                            onClick={() => setEditingId(null)}
+                            className="bg-gray-700 px-3 py-1 rounded-lg hover:bg-gray-600 text-white text-sm"
+                          >
+                            Cancel
+                          </button>
                         </div>
                       </div>
                     ) : (
                       <div className="flex items-center gap-4">
-                        <div className="w-32 cursor-pointer" onClick={() => setSelectedAsset({ name: pos.symbol, price: current, change })}>
+                        {/* Symbol */}
+                        <div
+                          className="w-32 cursor-pointer"
+                          onClick={() => setSelectedAsset({ name: pos.symbol, price: current, change })}
+                        >
                           <p className="text-white font-bold hover:text-purple-400">{pos.symbol}</p>
                           <p className="text-gray-400 text-sm">{pos.shares} shares</p>
                         </div>
+
+                        {/* Buy price */}
                         <div className="w-28">
                           <p className="text-gray-400 text-xs">Buy Price</p>
                           <p className="text-white text-sm">${parseFloat(pos.avg_buy_price).toFixed(2)}</p>
                         </div>
+
+                        {/* Current price */}
                         <div className="w-28">
                           <p className="text-gray-400 text-xs">Current</p>
                           <p className="text-white text-sm">${current.toFixed(2)}</p>
-                          <p className={`text-xs ${change >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                            {change >= 0 ? '+' : ''}{change?.toFixed(2)}% today
+                        </div>
+
+                        {/* Today's intraday move */}
+                        <div className="w-28">
+                          <p className="text-gray-400 text-xs">Today</p>
+                          <p className={`text-sm font-medium ${change >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            {change >= 0 ? '+' : ''}{change?.toFixed(2)}%
+                          </p>
+                          <p className={`text-xs ${intradayDollars >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                            {intradayDollars >= 0 ? '+' : ''}${intradayDollars.toFixed(2)}
                           </p>
                         </div>
+
+                        {/* Value */}
                         <div className="w-28">
                           <p className="text-gray-400 text-xs">Value</p>
                           <p className="text-white text-sm">${currentValue.toFixed(2)}</p>
                         </div>
+
+                        {/* P&L since entry */}
                         <div className="w-36">
-                          <p className="text-gray-400 text-xs">P&L</p>
+                          <p className="text-gray-400 text-xs">P&L (since entry)</p>
                           <p className={`text-sm font-medium ${pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                             {pnl >= 0 ? '+' : ''}${pnl.toFixed(2)}
                           </p>
@@ -423,9 +512,21 @@ function Portfolio({ token }) {
                             {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(2)}%
                           </p>
                         </div>
+
+                        {/* Actions */}
                         <div className="ml-auto flex gap-2">
-                          <button onClick={() => { setEditingId(pos.id); setEditShares(pos.shares) }} className="bg-gray-700 px-3 py-1 rounded-lg hover:bg-gray-600 text-white text-sm">Edit</button>
-                          <button onClick={() => handleSell(pos.id)} className="bg-red-900 px-3 py-1 rounded-lg hover:bg-red-800 text-red-300 text-sm">Sell</button>
+                          <button
+                            onClick={() => { setEditingId(pos.id); setEditShares(pos.shares) }}
+                            className="bg-gray-700 px-3 py-1 rounded-lg hover:bg-gray-600 text-white text-sm"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => handleSell(pos.id)}
+                            className="bg-red-900 px-3 py-1 rounded-lg hover:bg-red-800 text-red-300 text-sm"
+                          >
+                            Sell
+                          </button>
                         </div>
                       </div>
                     )}
@@ -455,14 +556,18 @@ function Portfolio({ token }) {
                         {tx.type === 'buy' ? 'BUY' : 'SELL'}
                       </span>
                       <span className="text-white font-medium w-20">{tx.symbol}</span>
-                      <span className="text-gray-400 text-sm">{tx.shares} shares @ ${parseFloat(tx.price).toFixed(2)}</span>
+                      <span className="text-gray-400 text-sm">
+                        {tx.shares} shares @ ${parseFloat(tx.price).toFixed(2)}
+                      </span>
                       {tx.pnl !== null && (
                         <span className={`text-sm font-medium ml-auto ${tx.pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
                           {tx.pnl >= 0 ? '+' : ''}${parseFloat(tx.pnl).toFixed(2)}
                         </span>
                       )}
                       <span className="text-gray-500 text-xs ml-auto">
-                        {new Date(tx.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        {new Date(tx.created_at).toLocaleDateString('en-US', {
+                          month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+                        })}
                       </span>
                     </div>
                   ))}

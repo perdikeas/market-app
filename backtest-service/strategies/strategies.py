@@ -331,7 +331,7 @@ def walk_forward_lstm(X, y, dates,
                       min_train_samples=200,
                       retrain_every=63,
                       epochs=30,
-                      batch_size=32,
+                      batch_size=64,
                       learning_rate=0.001,
                       seed=42):
 
@@ -478,6 +478,7 @@ LSTM_UNIVERSE = [
     'TSLA',
 ]
 
+#Combining LSTM and LightGBM signals
 def lstm_signal(df: pd.DataFrame, seq_len: int = 20, forward_days: int = 5,
                 threshold: float = 0.02, epochs: int = 30) -> pd.Series:
     """
@@ -555,6 +556,39 @@ def lstm_signal(df: pd.DataFrame, seq_len: int = 20, forward_days: int = 5,
     )
 
     return signals.reindex(df.index).fillna(0)
+
+def ensemble_signal(df: pd.DataFrame, forward_days: int = 5,
+                    threshold: float = 0.02, epochs: int = 30) -> pd.Series:
+    """
+    Ensemble: combines LSTM and LightGBM signals.
+    Only buys when both models agree on direction.
+    Fewer trades, higher precision, higher win rate.
+    Requires 5y period. Takes 5-8 minutes (LSTM training dominates).
+    """
+    import warnings
+    warnings.filterwarnings('ignore')
+
+    print("Running LightGBM...")
+    lgbm_sig = lightgbm_signal(df, forward_days=forward_days, threshold=threshold)
+
+    print("Running LSTM...")
+    lstm_sig = lstm_signal(df, forward_days=forward_days,
+                           threshold=threshold, epochs=epochs)
+
+    # Align both to df index
+    lgbm_sig = lgbm_sig.reindex(df.index).fillna(0)
+    lstm_sig = lstm_sig.reindex(df.index).fillna(0)
+
+    # Only act when both agree
+    combined = pd.Series(0, index=df.index)
+    combined[(lgbm_sig == 1)  & (lstm_sig == 1)]  =  1
+    combined[(lgbm_sig == -1) & (lstm_sig == -1)] = -1
+
+    buy_days  = (combined == 1).sum()
+    sell_days = (combined == -1).sum()
+    print(f"  Ensemble: {buy_days} buy days, {sell_days} sell days where both models agreed")
+
+    return combined
 
 # ─────────────────────────────────────────────
 # 1. SMA Crossover
@@ -1079,7 +1113,17 @@ STRATEGIES = {
             "seq_len":      {"type": "int",   "default": 20,   "min": 10,  "max": 40,   "label": "Sequence Length (days)"},
             "forward_days": {"type": "int",   "default": 5,    "min": 3,   "max": 20,   "label": "Forecast Horizon (days)"},
             "threshold":    {"type": "float", "default": 0.02, "min": 0.01,"max": 0.05, "label": "Signal Threshold"},
-            "epochs":       {"type": "int",   "default": 20,   "min": 10,  "max": 50,   "label": "Training Epochs"},
+            "epochs":       {"type": "int",   "default": 30,   "min": 10,  "max": 50,   "label": "Training Epochs"},
+        }
+    },
+    "ensemble": {
+        "fn": ensemble_signal,
+        "name": "Ensemble (LSTM + LightGBM)",
+        "description": "Combines LSTM neural network and LightGBM gradient boosting. Only signals when both models agree — fewer trades, higher precision. Requires 5y period. Takes 5-8 minutes.",
+        "params": {
+            "forward_days": {"type": "int",   "default": 5,    "min": 3,   "max": 20,   "label": "Forecast Horizon (days)"},
+            "threshold":    {"type": "float", "default": 0.02, "min": 0.01,"max": 0.05, "label": "Signal Threshold"},
+            "epochs":       {"type": "int",   "default": 30,   "min": 10,  "max": 50,   "label": "LSTM Epochs"},
         }
     },
 }
