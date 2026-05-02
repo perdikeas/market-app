@@ -333,7 +333,8 @@ def walk_forward_lstm(X, y, dates,
                       epochs=30,
                       batch_size=64,
                       learning_rate=0.001,
-                      seed=42):
+                      seed=42,
+                      model_fn = None):
 
     import torch
     import torch.nn as nn
@@ -366,7 +367,9 @@ def walk_forward_lstm(X, y, dates,
         loader   = DataLoader(dataset, batch_size=batch_size,
                               shuffle=True, generator=generator)
 
-        model     = build_lstm_model()
+        # Use provided model factory or default to LSTM
+        build_fn = model_fn if model_fn is not None else build_lstm_model
+        model = build_fn()
         optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
         criterion = torch.nn.CrossEntropyLoss(weight=weights)
 
@@ -430,7 +433,9 @@ def walk_forward_lstm(X, y, dates,
         loader   = DataLoader(dataset, batch_size=batch_size,
                               shuffle=True, generator=generator)
 
-        model     = build_lstm_model()
+        # Use provided model factory or default to LSTM
+        build_fn = model_fn if model_fn is not None else build_lstm_model
+        model = build_fn()
         optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
         criterion = torch.nn.CrossEntropyLoss(weight=weights)
 
@@ -559,36 +564,385 @@ def lstm_signal(df: pd.DataFrame, seq_len: int = 20, forward_days: int = 5,
 
 def ensemble_signal(df: pd.DataFrame, forward_days: int = 5,
                     threshold: float = 0.02, epochs: int = 30) -> pd.Series:
-    """
-    Ensemble: combines LSTM and LightGBM signals.
-    Only buys when both models agree on direction.
-    Fewer trades, higher precision, higher win rate.
-    Requires 5y period. Takes 5-8 minutes (LSTM training dominates).
-    """
     import warnings
     warnings.filterwarnings('ignore')
 
     print("Running LightGBM...")
     lgbm_sig = lightgbm_signal(df, forward_days=forward_days, threshold=threshold)
 
-    print("Running LSTM...")
-    lstm_sig = lstm_signal(df, forward_days=forward_days,
-                           threshold=threshold, epochs=epochs)
+    print("Running Transformer...")
+    trans_sig = transformer_signal(df, forward_days=forward_days,
+                                   threshold=threshold, epochs=epochs)
 
-    # Align both to df index
-    lgbm_sig = lgbm_sig.reindex(df.index).fillna(0)
-    lstm_sig = lstm_sig.reindex(df.index).fillna(0)
+    lgbm_sig  = lgbm_sig.reindex(df.index).fillna(0)
+    trans_sig = trans_sig.reindex(df.index).fillna(0)
 
-    # Only act when both agree
     combined = pd.Series(0, index=df.index)
-    combined[(lgbm_sig == 1)  & (lstm_sig == 1)]  =  1
-    combined[(lgbm_sig == -1) & (lstm_sig == -1)] = -1
+    combined[(lgbm_sig == 1)  & (trans_sig == 1)]  =  1
+    combined[(lgbm_sig == -1) & (trans_sig == -1)] = -1
 
     buy_days  = (combined == 1).sum()
     sell_days = (combined == -1).sum()
-    print(f"  Ensemble: {buy_days} buy days, {sell_days} sell days where both models agreed")
+    print(f"  Ensemble: {buy_days} buy days, {sell_days} sell days")
 
     return combined
+
+
+def build_transformer_model(input_size: int = 21, d_model: int = 64,
+                             nhead: int = 4, num_layers: int = 2,
+                             dropout: float = 0.1):
+    """
+    Transformer classifier for time series prediction.
+
+    Architecture:
+      Input (batch, seq_len, input_size)
+        → Linear projection (input_size → d_model)
+        → Positional Encoding
+        → N × TransformerEncoderLayer (self-attention + FFN)
+        → Global average pooling across seq_len
+        → Linear (d_model → 3)
+        → Output: raw scores for [sell, hold, buy]
+
+    Key difference from LSTM: every timestep attends to every
+    other timestep simultaneously — no information decay.
+    """
+    import torch
+    import torch.nn as nn
+    import math
+
+    class PositionalEncoding(nn.Module):
+        def __init__(self, d_model, max_len=100, dropout=0.1):
+            super().__init__()
+            self.dropout = nn.Dropout(dropout)
+
+            # Build the positional encoding table once
+            pe = torch.zeros(max_len, d_model)
+            position = torch.arange(0, max_len).unsqueeze(1).float()
+            div_term = torch.exp(
+                torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+            )
+            pe[:, 0::2] = torch.sin(position * div_term)  # even dims
+            pe[:, 1::2] = torch.cos(position * div_term)  # odd dims
+            pe = pe.unsqueeze(0)  # (1, max_len, d_model)
+            self.register_buffer('pe', pe)
+
+        def forward(self, x):
+            # x: (batch, seq_len, d_model)
+            x = x + self.pe[:, :x.size(1), :]
+            return self.dropout(x)
+
+    class TransformerClassifier(nn.Module):
+        def __init__(self):
+            super().__init__()
+
+            # Project raw features up to d_model dimensions
+            self.input_projection = nn.Linear(input_size, d_model)
+
+            self.pos_encoding = PositionalEncoding(d_model, dropout=dropout)
+
+            # Stack of Transformer encoder layers
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model    = d_model,
+                nhead      = nhead,
+                dim_feedforward = d_model * 4,  # standard: 4x d_model
+                dropout    = dropout,
+                batch_first = True              # (batch, seq, features)
+            )
+            self.transformer = nn.TransformerEncoder(
+                encoder_layer,
+                num_layers = num_layers
+            )
+
+            self.classifier = nn.Sequential(
+                nn.Linear(d_model, 32),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(32, 3)
+            )
+
+        def forward(self, x):
+            # x: (batch, seq_len, input_size)
+
+            # Project to d_model
+            x = self.input_projection(x)
+            # x: (batch, seq_len, d_model)
+
+            # Add positional encoding
+            x = self.pos_encoding(x)
+
+            # Self-attention across all timesteps
+            x = self.transformer(x)
+            # x: (batch, seq_len, d_model)
+
+            # Global average pooling — average across all 20 timesteps
+            # Every day contributes equally to the final representation
+            # Unlike LSTM which only used the last timestep
+            x = x.mean(dim=1)
+            # x: (batch, d_model)
+
+            return self.classifier(x)
+
+    return TransformerClassifier()
+
+def transformer_signal(df: pd.DataFrame, seq_len: int = 20, forward_days: int = 5,
+                        threshold: float = 0.02, epochs: int = 30) -> pd.Series:
+    """
+    Transformer-based signal using multi-ticker training and walk-forward validation.
+    Same pipeline as LSTM but replaces recurrent layers with self-attention.
+    Every timestep attends to every other simultaneously — no information decay.
+    Requires 5y period. Training takes 5-8 minutes.
+    """
+    import warnings
+    warnings.filterwarnings('ignore')
+
+    print("Fetching multi-ticker training data (Transformer)...")
+    all_X, all_y = [], []
+
+    for ticker in LSTM_UNIVERSE:
+        try:
+            df_ticker = fetch_ohlcv(ticker, "5y")
+
+            # Leakage check — skip if this is the target ticker
+            if len(df_ticker) == len(df):
+                overlap = min(len(df_ticker), len(df))
+                correlation = np.corrcoef(
+                    df_ticker['close'].values[-overlap:],
+                    df['close'].values[-overlap:]
+                )[0, 1]
+                if correlation > 0.999:
+                    print(f"  {ticker}: skipped (target ticker)")
+                    continue
+
+            feat         = build_features(df_ticker)
+            targ         = build_targets(df_ticker, forward_days=forward_days,
+                                         threshold=threshold)
+            X_t, y_t, _ = build_sequences(feat, targ, seq_len=seq_len)
+            all_X.append(X_t)
+            all_y.append(y_t)
+            print(f"  {ticker}: {len(X_t)} samples")
+        except Exception as e:
+            print(f"  {ticker}: skipped ({e})")
+
+    if not all_X:
+        print("No training data collected.")
+        return pd.Series(0, index=df.index)
+
+    X_train = np.concatenate(all_X, axis=0)
+    y_train = np.concatenate(all_y, axis=0)
+    print(f"Total training samples: {len(X_train)}")
+
+    # Build prediction sequences from target ticker
+    feat_target = build_features(df)
+    targ_target = build_targets(df, forward_days=forward_days, threshold=threshold)
+    X_pred, _, dates_pred = build_sequences(feat_target, targ_target, seq_len=seq_len)
+
+    # Normalize — fit on training data only
+    from sklearn.preprocessing import StandardScaler
+    n_train, sl, nf = X_train.shape
+    scaler     = StandardScaler()
+    X_train_2d = scaler.fit_transform(X_train.reshape(-1, nf))
+    X_train    = X_train_2d.reshape(n_train, sl, nf)
+
+    n_pred    = X_pred.shape[0]
+    X_pred_2d = scaler.transform(X_pred.reshape(-1, nf))
+    X_pred    = X_pred_2d.reshape(n_pred, sl, nf)
+
+    # Train using walk_forward_lstm but with Transformer model
+    signals = walk_forward_lstm(
+        X_train, y_train,
+        dates=dates_pred,
+        X_pred_override=X_pred,
+        epochs=epochs,
+        min_train_samples=len(X_train),
+        retrain_every=len(X_train),
+        model_fn=build_transformer_model,   # ← swap the model
+    )
+
+    return signals.reindex(df.index).fillna(0)
+
+
+'''
+PatchTST: Transformer where input is divided into patches of consecutive days.
+Each patch = one token containing patch_size days of local context.
+With seq_len = 20:
+    - 6 full patches of 3 days each (18 days)
+    - one remaining patch of 2 days
+    Total: 7 tokens instead of 20
+Advantages over Vanilla Transformer:
+    -Local temporal context captured within each token
+    -Shorter sequence = more efficient attention
+    -Less overfitting on limited data
+'''
+def build_patchtst_model(input_size: int = 21, patch_size: int = 3,
+                          d_model: int = 64, nhead: int = 4,
+                          num_layers: int = 2, dropout: float = 0.1):
+    import torch
+    import torch.nn as nn
+    import math
+
+    class PatchEmbedding(nn.Module):
+        """Splits sequence into patches and projects each to d_model."""
+        def __init__(self):
+            super().__init__()
+            # Each patch contains patch_size days × input_size features
+            self.patch_size = patch_size
+            self.projection = nn.Linear(patch_size * input_size, d_model)
+
+        def forward(self, x):
+            # x: (batch, seq_len, input_size)
+            batch, seq_len, features = x.shape
+
+            # Pad sequence so it divides evenly into patches
+            remainder = seq_len % patch_size
+            if remainder != 0:
+                pad_len = patch_size - remainder
+                padding = x[:, -1:, :].expand(-1, pad_len, -1)
+                x = torch.cat([x, padding], dim=1)
+
+            # Reshape into patches
+            n_patches = x.shape[1] // patch_size
+            x = x.reshape(batch, n_patches, patch_size * features)
+            # x: (batch, n_patches, patch_size * input_size)
+
+            return self.projection(x)
+            # output: (batch, n_patches, d_model)
+
+    class PositionalEncoding(nn.Module):
+        def __init__(self, d_model, max_len=100, dropout=0.1):
+            super().__init__()
+            self.dropout = nn.Dropout(dropout)
+            pe = torch.zeros(max_len, d_model)
+            position = torch.arange(0, max_len).unsqueeze(1).float()
+            div_term = torch.exp(
+                torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
+            )
+            pe[:, 0::2] = torch.sin(position * div_term)
+            pe[:, 1::2] = torch.cos(position * div_term)
+            pe = pe.unsqueeze(0)
+            self.register_buffer('pe', pe)
+
+        def forward(self, x):
+            x = x + self.pe[:, :x.size(1), :]
+            return self.dropout(x)
+
+    class PatchTSTClassifier(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.patch_embedding = PatchEmbedding()
+            self.pos_encoding    = PositionalEncoding(d_model, dropout=dropout)
+
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model         = d_model,
+                nhead           = nhead,
+                dim_feedforward = d_model * 4,
+                dropout         = dropout,
+                batch_first     = True
+            )
+            self.transformer = nn.TransformerEncoder(encoder_layer,
+                                                      num_layers=num_layers)
+
+            self.classifier = nn.Sequential(
+                nn.Linear(d_model, 32),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(32, 3)
+            )
+
+        def forward(self, x):
+            # x: (batch, seq_len, input_size)
+
+            # Convert days → patches
+            x = self.patch_embedding(x)
+            # x: (batch, n_patches, d_model)
+
+            # Add positional encoding at patch level
+            x = self.pos_encoding(x)
+
+            # Self-attention across patches
+            x = self.transformer(x)
+            # x: (batch, n_patches, d_model)
+
+            # Global average pooling across patches
+            x = x.mean(dim=1)
+            # x: (batch, d_model)
+
+            return self.classifier(x)
+
+    return PatchTSTClassifier()
+
+
+def patchtst_signal(df: pd.DataFrame, seq_len: int = 20, forward_days: int = 5,
+                    threshold: float = 0.02, epochs: int = 30) -> pd.Series:
+    """
+    PatchTST: Transformer with patch-based tokenization.
+    Groups consecutive days into patches before self-attention.
+    With seq_len=20, patch_size=3 → 7 tokens instead of 20.
+    Captures local temporal context within each patch.
+    Requires 5y period. Takes 5-8 minutes.
+    """
+    import warnings
+    warnings.filterwarnings('ignore')
+
+    print("Fetching multi-ticker training data (PatchTST)...")
+    all_X, all_y = [], []
+
+    for ticker in LSTM_UNIVERSE:
+        try:
+            df_ticker = fetch_ohlcv(ticker, "5y")
+
+            if len(df_ticker) == len(df):
+                overlap = min(len(df_ticker), len(df))
+                correlation = np.corrcoef(
+                    df_ticker['close'].values[-overlap:],
+                    df['close'].values[-overlap:]
+                )[0, 1]
+                if correlation > 0.999:
+                    print(f"  {ticker}: skipped (target ticker)")
+                    continue
+
+            feat         = build_features(df_ticker)
+            targ         = build_targets(df_ticker, forward_days=forward_days,
+                                         threshold=threshold)
+            X_t, y_t, _ = build_sequences(feat, targ, seq_len=seq_len)
+            all_X.append(X_t)
+            all_y.append(y_t)
+            print(f"  {ticker}: {len(X_t)} samples")
+        except Exception as e:
+            print(f"  {ticker}: skipped ({e})")
+
+    if not all_X:
+        print("No training data collected.")
+        return pd.Series(0, index=df.index)
+
+    X_train = np.concatenate(all_X, axis=0)
+    y_train = np.concatenate(all_y, axis=0)
+    print(f"Total training samples: {len(X_train)}")
+
+    feat_target = build_features(df)
+    targ_target = build_targets(df, forward_days=forward_days, threshold=threshold)
+    X_pred, _, dates_pred = build_sequences(feat_target, targ_target, seq_len=seq_len)
+
+    from sklearn.preprocessing import StandardScaler
+    n_train, sl, nf = X_train.shape
+    scaler     = StandardScaler()
+    X_train_2d = scaler.fit_transform(X_train.reshape(-1, nf))
+    X_train    = X_train_2d.reshape(n_train, sl, nf)
+
+    n_pred    = X_pred.shape[0]
+    X_pred_2d = scaler.transform(X_pred.reshape(-1, nf))
+    X_pred    = X_pred_2d.reshape(n_pred, sl, nf)
+
+    signals = walk_forward_lstm(
+        X_train, y_train,
+        dates=dates_pred,
+        X_pred_override=X_pred,
+        epochs=epochs,
+        min_train_samples=len(X_train),
+        retrain_every=len(X_train),
+        model_fn=build_patchtst_model,
+    )
+
+    return signals.reindex(df.index).fillna(0)
 
 # ─────────────────────────────────────────────
 # 1. SMA Crossover
@@ -1118,12 +1472,34 @@ STRATEGIES = {
     },
     "ensemble": {
         "fn": ensemble_signal,
-        "name": "Ensemble (LSTM + LightGBM)",
-        "description": "Combines LSTM neural network and LightGBM gradient boosting. Only signals when both models agree — fewer trades, higher precision. Requires 5y period. Takes 5-8 minutes.",
+        "name": "Ensemble (Transformer + LightGBM)",
+        "description": "Combines Transformer neural network and LightGBM gradient boosting. Only signals when both models agree — fewer trades, higher precision. Requires 5y period. Takes 5-8 minutes.",
         "params": {
             "forward_days": {"type": "int",   "default": 5,    "min": 3,   "max": 20,   "label": "Forecast Horizon (days)"},
             "threshold":    {"type": "float", "default": 0.02, "min": 0.01,"max": 0.05, "label": "Signal Threshold"},
             "epochs":       {"type": "int",   "default": 30,   "min": 10,  "max": 50,   "label": "LSTM Epochs"},
+        }
+    },
+    "transformer": {
+        "fn": transformer_signal,
+        "name": "Transformer (Self-Attention)",
+        "description": "Transformer encoder trained on 15 diverse tickers. Every timestep attends to every other simultaneously — no information decay unlike LSTM. State-of-the-art sequence model. Requires 5y period. Takes 5-8 minutes.",
+        "params": {
+            "seq_len":      {"type": "int",   "default": 20,   "min": 10,  "max": 40,   "label": "Sequence Length (days)"},
+            "forward_days": {"type": "int",   "default": 5,    "min": 3,   "max": 20,   "label": "Forecast Horizon (days)"},
+            "threshold":    {"type": "float", "default": 0.02, "min": 0.01,"max": 0.05, "label": "Signal Threshold"},
+            "epochs":       {"type": "int",   "default": 30,   "min": 10,  "max": 50,   "label": "Training Epochs"},
+        }
+    },
+    "patchtst": {
+        "fn": patchtst_signal,
+        "name": "PatchTST",
+        "description": "Transformer with patch tokenization — groups 3 consecutive days into each token. Captures local temporal context, shorter attention sequence, less overfitting than vanilla Transformer. Requires 5y period. Takes 5-8 minutes.",
+        "params": {
+            "seq_len":      {"type": "int",   "default": 20,   "min": 10,  "max": 40,   "label": "Sequence Length (days)"},
+            "forward_days": {"type": "int",   "default": 5,    "min": 3,   "max": 20,   "label": "Forecast Horizon (days)"},
+            "threshold":    {"type": "float", "default": 0.02, "min": 0.01,"max": 0.05, "label": "Signal Threshold"},
+            "epochs":       {"type": "int",   "default": 30,   "min": 10,  "max": 50,   "label": "Training Epochs"},
         }
     },
 }
