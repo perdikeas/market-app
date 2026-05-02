@@ -127,6 +127,7 @@ Only signals when both models independently agree on direction. Fewer trades, hi
 ┌─────────────────────────────────────────────────┐
 │               React Frontend (Vite)              │
 │  Dashboard │ Watchlist │ Portfolio │ Backtester  │
+│                    Port 5173                     │
 └──────────────────────┬──────────────────────────┘
                        │ HTTP
           ┌────────────┴────────────┐
