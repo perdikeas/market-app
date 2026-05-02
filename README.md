@@ -3,7 +3,7 @@
 A full-stack algorithmic trading platform combining real-time market data, AI-powered analysis, and a sophisticated quantitative backtesting engine with state-of-the-art machine learning models.
 
 > **Demo video:** [YouTube link] &nbsp;|&nbsp; 
-[![MarketDash Demo](https://youtu.be/Pmx8I3rYUH0)](https://youtu.be/ABC123xyz)
+[![MarketDash Demo](https://youtu.be/Pmx8I3rYUH0)]
 
 ---
 
