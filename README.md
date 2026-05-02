@@ -219,35 +219,35 @@ Open [http://localhost:5173](http://localhost:5173)
 ## Screenshots
 
 ###Dashboard
-[!Dashboard](screenshots/Dashboard-tab.png)
+![Dashboard](screenshots/Dashboard-tab.png)
 
 ###Asset Card
-[!Asset card](screenshots/Asset-Card-overview.png)
+![Asset card](screenshots/Asset-Card-overview.png)
 
 ###Strategy Backtester
-[!Strategy comparison](screenshots/4-strategies-comparison-mode.png)
+![Strategy comparison](screenshots/4-strategies-comparison-mode.png)
 
-[!Equity curves strategy comparison](screenshots/equity-curves-comparison-mode-4-strategies.png)
+![Equity curves strategy comparison](screenshots/equity-curves-comparison-mode-4-strategies.png)
 
 ###Machine Learning Models
 
-[!LightGBM Nvidia 5 years](screenshots/NVDA-LightGBM-5-years.png)
+![LightGBM Nvidia 5 years](screenshots/NVDA-LightGBM-5-years.png)
 
-[!LightGBM Nvidia 5 years feature importance scores](screenshots/feature_importance_NVDA.png)
+![LightGBM Nvidia 5 years feature importance scores](screenshots/feature_importance_NVDA.png)
 
-[!LSTM (Long Short Term Memory) Neural Network Apple 5 years](screenshots/AAPL-LSTM-5-years.png)
+![LSTM (Long Short Term Memory) Neural Network Apple 5 years](screenshots/AAPL-LSTM-5-years.png)
 
-[!LSTM Morgan Stanley 5 years](screenshots/Very-strong-result-LSTM-Morgan-Stanley-5-years.png)
+![LSTM Morgan Stanley 5 years](screenshots/Very-strong-result-LSTM-Morgan-Stanley-5-years.png)
 
-[!Original Ensemble Model (LightGBM + LSTM) Morgan Stanley 5 years](screenshots/MS-Ensemble-5-years.png)
+![Original Ensemble Model (LightGBM + LSTM) Morgan Stanley 5 years](screenshots/MS-Ensemble-5-years.png)
 
-[!Transformer Model Apple 5 years](screenshots/AAPL-5years-Transformer.png)
+![Transformer Model Apple 5 years](screenshots/AAPL-5years-Transformer.png)
 
-[!Transformer Model Apple 5 years equity curve vs. buy&hold](screenshots/AAPL-5years-Transformer-Equity-curve.png)
+![Transformer Model Apple 5 years equity curve vs. buy&hold](screenshots/AAPL-5years-Transformer-Equity-curve.png)
 
-[!Transformer JP Morgan 5 years](screenshots/JPM-5years-Transformer.png)
+![Transformer JP Morgan 5 years](screenshots/JPM-5years-Transformer.png)
 
-[!Transformer Morgan Stanley 5 years](screenshots/MS-5y-Transformer.png)
+![Transformer Morgan Stanley 5 years](screenshots/MS-5y-Transformer.png)
 
 ---
 
