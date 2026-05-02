@@ -218,18 +218,18 @@ Open [http://localhost:5173](http://localhost:5173)
 
 ## Screenshots
 
-###Dashboard
+Dashboard
 ![Dashboard](screenshots/Dashboard-tab.png)
 
-###Asset Card
+Asset Card
 ![Asset card](screenshots/Asset-Card-overview.png)
 
-###Strategy Backtester
+Strategy Backtester
 ![Strategy comparison](screenshots/4-strategies-comparison-mode.png)
 
 ![Equity curves strategy comparison](screenshots/equity-curves-comparison-mode-4-strategies.png)
 
-###Machine Learning Models
+Machine Learning Models
 
 ![LightGBM Nvidia 5 years](screenshots/NVDA-LightGBM-5-years.png)
 
