@@ -100,14 +100,16 @@ Self-attention encoder trained on the same 15-ticker universe. Every timestep in
 
 **Benchmark results (5-year backtest):**
 
-| Ticker | Model | Sharpe | Win Rate | Return | Buy&Hold
-|---|---|---|---|---|
-| MS | Transformer | 2.054 | 71.4% | +451% | +171%
-| MS | LSTM | 1.526 | 67.3% | +299% | +170%
-| MS | LightGBM | 1.242 | 60.9% | +128% | +171%
-| JPM | Transformer | 1.511 | 70.5% | +208% | +131%
-| NVDA | LightGBM | 1.129 | 57.1% | +263% | +1248.5% (crazy bull run)
-| AAPL | Transformer | 1.183 | 68.4% | +170% | +117%
+| Ticker | Model | Sharpe | Win Rate | Return | Buy & Hold |
+|---|---|---|---|---|---|
+| MS | Transformer | 2.054 | 71.4% | +451% | +171% |
+| MS | LSTM | 1.526 | 67.3% | +299% | +170% |
+| MS | LightGBM | 1.242 | 60.9% | +128% | +171% |
+| JPM | Transformer | 1.511 | 70.5% | +208% | +131% |
+| NVDA | LightGBM | 1.129 | 57.1% | +263% | +1248.5% |
+| AAPL | Transformer | 1.183 | 68.4% | +170% | +117% |
+
+*NVDA buy&hold reflects an exceptional 5-year bull-run driven by the AI boom - not representative of typical market conditions*
 
 *Transformer excels on macro-driven trending stocks. LightGBM wins on high-volatility momentum names. No single model wins everywhere — regime-dependent performance.*
 
